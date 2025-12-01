@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>10-Q SEC EDGAR Analyzer</title>
+    <style>
+        :root {
+            --bg-primary: #0a0e14;
+            --bg-secondary: #131920;
+            --bg-tertiary: #1a2028;
+            --text-primary: #e6edf3;
+            --text-secondary: #7d8590;
+            --accent-blue: #2f81f7;
+            --accent-green: #238636;
+            --accent-red: #da3633;
+            --accent-yellow: #d29922;
+            --accent-purple: #8957e5;
+            --accent-cyan: #39c5cf;
+            --border-color: #30363d;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding: 2rem;
+            background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%);
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+
+        h1 {
+            font-size: 2rem;
+            color: var(--accent-cyan);
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: var(--text-secondary);
+        }
+
+        .url-section {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .url-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+
+        .url-card h3 {
+            color: var(--accent-blue);
+            margin-bottom: 0.75rem;
+            font-size: 0.9rem;
+        }
+
+        .url-card input {
+            width: 100%;
+            padding: 0.6rem;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 0.85rem;
+        }
+
+        .url-card input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        .url-card input::placeholder {
+            color: var(--text-secondary);
+        }
+
+        .status {
+            margin-top: 0.5rem;
+            font-size: 0.8rem;
+            min-height: 1.2rem;
+        }
+
+        .status.loading { color: var(--accent-yellow); }
+        .status.success { color: var(--accent-green); }
+        .status.error { color: var(--accent-red); }
+
+        .example-urls {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            border-left: 3px solid var(--accent-yellow);
+        }
+
+        .example-urls h4 {
+            color: var(--accent-yellow);
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+        }
+
+        .example-urls code {
+            display: block;
+            background: var(--bg-tertiary);
+            padding: 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            margin: 0.25rem 0;
+            word-break: break-all;
+            color: var(--text-secondary);
+        }
+
+        .example-urls button {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--accent-blue);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            cursor: pointer;
+            margin-left: 0.5rem;
+        }
+
+        .example-urls button:hover {
+            background: var(--accent-blue);
+            color: white;
+        }
+
+        .analyze-btn {
+            display: block;
+            width: 100%;
+            max-width: 300px;
+            margin: 1rem auto;
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+            font-weight: 600;
+            background: var(--accent-blue);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .analyze-btn:hover:not(:disabled) {
+            background: #1f6feb;
+            transform: translateY(-1px);
+        }
+
+        .analyze-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .results {
+            display: none;
+        }
+
+        .results.visible {
+            display: block;
+        }
+
+        .section-title {
+            font-size: 1.1rem;
+            color: var(--accent-cyan);
+            margin: 1.5rem 0 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 1rem;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            overflow: hidden;
+            font-size: 0.85rem;
+        }
+
+        th, td {
+            padding: 0.6rem 0.8rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            background: var(--bg-tertiary);
+            color: var(--accent-blue);
+            font-weight: 600;
+            font-size: 0.8rem;
+        }
+
+        tr:hover {
+            background: rgba(47, 129, 247, 0.05);
+        }
+
+        .metric-name {
+            color: var(--text-secondary);
+        }
+
+        .positive { color: var(--accent-green); }
+        .negative { color: var(--accent-red); }
+        .na { color: var(--text-secondary); font-style: italic; }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+            margin: 1rem 0;
+        }
+
+        .summary-card {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 1rem;
+            border-left: 3px solid var(--accent-green);
+        }
+
+        .summary-card.warning {
+            border-left-color: var(--accent-red);
+        }
+
+        .summary-card h4 {
+            color: var(--accent-green);
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .summary-card.warning h4 {
+            color: var(--accent-red);
+        }
+
+        .summary-card p {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+
+        .red-flag {
+            color: var(--accent-red);
+            padding: 0.25rem 0;
+            font-size: 0.85rem;
+        }
+
+        .export-btns {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: center;
+            margin: 1rem 0;
+        }
+
+        .export-btn {
+            padding: 0.5rem 1rem;
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: all 0.2s;
+        }
+
+        .export-btn:hover {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+        }
+
+        .loading-indicator {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-secondary);
+            display: none;
+        }
+
+        .loading-indicator.visible {
+            display: block;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--border-color);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 0.5rem;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .cors-notice {
+            background: var(--bg-secondary);
+            border: 1px solid var(--accent-yellow);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            font-size: 0.85rem;
+        }
+
+        .cors-notice h4 {
+            color: var(--accent-yellow);
+            margin-bottom: 0.5rem;
+        }
+
+        .cors-notice p {
+            color: var(--text-secondary);
+        }
+
+        .cors-notice a {
+            color: var(--accent-blue);
+        }
+
+        @media (max-width: 900px) {
+            .url-section {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 10-Q SEC EDGAR Analyzer</h1>
+            <p class="subtitle">Analyze and compare SEC 10-Q HTML filings directly from EDGAR</p>
+        </header>
+
+        <div class="cors-notice">
+            <h4>⚠️ Browser Security Note</h4>
+            <p>Due to browser security (CORS), you may need to use a CORS proxy or download the HTML files. 
+            The tool will first try to fetch directly, then fall back to a proxy. 
+            Alternatively, <strong>right-click → Save As</strong> the SEC HTML page and use the <a href="10q_analyzer.html">file upload version</a>.</p>
+        </div>
+
+        <div class="example-urls">
+            <h4>📋 Example SEC EDGAR URLs (click to use)</h4>
+            <div style="display: flex; align-items: center; margin: 0.5rem 0;">
+                <code id="ex1">https://www.sec.gov/Archives/edgar/data/1652044/000165204424000091/goog-20240930.htm</code>
+                <button onclick="useExample(1, 'ex1')">Use</button>
+            </div>
+            <div style="display: flex; align-items: center; margin: 0.5rem 0;">
+                <code id="ex2">https://www.sec.gov/Archives/edgar/data/1045810/000104581024000316/nvda-20241027.htm</code>
+                <button onclick="useExample(2, 'ex2')">Use</button>
+            </div>
+            <div style="display: flex; align-items: center; margin: 0.5rem 0;">
+                <code id="ex3">https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/aapl-20240928.htm</code>
+                <button onclick="useExample(3, 'ex3')">Use</button>
+            </div>
+        </div>
+
+        <div class="url-section">
+            <div class="url-card">
+                <h3>Company 1</h3>
+                <input type="text" id="url1" placeholder="Paste SEC EDGAR HTML URL...">
+                <div class="status" id="status1"></div>
+            </div>
+            <div class="url-card">
+                <h3>Company 2</h3>
+                <input type="text" id="url2" placeholder="Paste SEC EDGAR HTML URL...">
+                <div class="status" id="status2"></div>
+            </div>
+            <div class="url-card">
+                <h3>Company 3</h3>
+                <input type="text" id="url3" placeholder="Paste SEC EDGAR HTML URL...">
+                <div class="status" id="status3"></div>
+            </div>
+        </div>
+
+        <button class="analyze-btn" onclick="analyzeAll()" id="analyzeBtn">
+            🔍 Fetch & Analyze
+        </button>
+
+        <div class="loading-indicator" id="loading">
+            <span class="spinner"></span>
+            Fetching and analyzing SEC filings...
+        </div>
+
+        <div class="results" id="results">
+            <div class="export-btns">
+                <button class="export-btn" onclick="exportMarkdown()">📝 Markdown</button>
+                <button class="export-btn" onclick="exportJSON()">📊 JSON</button>
+                <button class="export-btn" onclick="exportCSV()">📈 CSV</button>
+            </div>
+
+            <h2 class="section-title">📋 Company Overview</h2>
+            <table id="overviewTable">
+                <thead><tr><th>#</th><th>Company</th><th>Filing Period</th><th>CIK</th></tr></thead>
+                <tbody></tbody>
+            </table>
+
+            <h2 class="section-title">💰 Income Statement (in millions)</h2>
+            <table id="incomeTable">
+                <thead><tr><th>Metric</th><th id="i-h1">Co 1</th><th id="i-h2">Co 2</th><th id="i-h3">Co 3</th></tr></thead>
+                <tbody></tbody>
+            </table>
+
+            <h2 class="section-title">🏦 Balance Sheet (in millions)</h2>
+            <table id="balanceTable">
+                <thead><tr><th>Metric</th><th id="b-h1">Co 1</th><th id="b-h2">Co 2</th><th id="b-h3">Co 3</th></tr></thead>
+                <tbody></tbody>
+            </table>
+
+            <h2 class="section-title">💵 Cash Flow (in millions)</h2>
+            <table id="cashflowTable">
+                <thead><tr><th>Metric</th><th id="c-h1">Co 1</th><th id="c-h2">Co 2</th><th id="c-h3">Co 3</th></tr></thead>
+                <tbody></tbody>
+            </table>
+
+            <h2 class="section-title">📊 Key Ratios</h2>
+            <table id="ratiosTable">
+                <thead><tr><th>Metric</th><th id="r-h1">Co 1</th><th id="r-h2">Co 2</th><th id="r-h3">Co 3</th></tr></thead>
+                <tbody></tbody>
+            </table>
+
+            <h2 class="section-title">🏆 Executive Summary</h2>
+            <div class="summary-grid" id="summaryCards"></div>
+
+            <h2 class="section-title">⚠️ Red Flags</h2>
+            <div class="summary-grid" id="redFlags"></div>
+        </div>
+    </div>
+
+    <script>
+        let analysisResults = [];
+
+        function useExample(num, exId) {
+            document.getElementById(`url${num}`).value = document.getElementById(exId).textContent;
+        }
+
+        async function fetchHTML(url, statusEl) {
+            statusEl.className = 'status loading';
+            statusEl.textContent = 'Fetching...';
+
+            // List of CORS proxies to try
+            const proxies = [
+                '', // Try direct first
+                'https://api.allorigins.win/raw?url=',
+                'https://corsproxy.io/?',
+                'https://cors-anywhere.herokuapp.com/',
+            ];
+
+            for (const proxy of proxies) {
+                try {
+                    const fetchUrl = proxy + encodeURIComponent(url);
+                    const response = await fetch(proxy ? fetchUrl : url, {
+                        headers: proxy ? {} : { 'Accept': 'text/html' }
+                    });
+                    
+                    if (response.ok) {
+                        const html = await response.text();
+                        if (html.length > 1000 && (html.includes('10-Q') || html.includes('FORM') || html.includes('<table'))) {
+                            statusEl.className = 'status success';
+                            statusEl.textContent = '✓ Loaded successfully';
+                            return html;
+                        }
+                    }
+                } catch (e) {
+                    console.log(`Proxy ${proxy || 'direct'} failed:`, e.message);
+                }
+            }
+
+            statusEl.className = 'status error';
+            statusEl.textContent = '✗ Failed - try downloading the file';
+            return null;
+        }
+
+        function parseNumber(str) {
+            if (!str || str === '—' || str === '-' || str === 'N/A') return null;
+            
+            let clean = str.replace(/[$,\s]/g, '').trim();
+            const isNegative = clean.includes('(') || clean.startsWith('-');
+            clean = clean.replace(/[()−-]/g, '');
+            
+            const num = parseFloat(clean);
+            if (isNaN(num)) return null;
+            
+            return isNegative ? -num : num;
+        }
+
+        function extractFromTables(html, keywords) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const tables = doc.querySelectorAll('table');
+            
+            const keywordsLower = keywords.map(k => k.toLowerCase());
+            
+            for (const table of tables) {
+                const rows = table.querySelectorAll('tr');
+                
+                for (const row of rows) {
+                    const cells = row.querySelectorAll('td, th');
+                    if (cells.length < 2) continue;
+                    
+                    const rowText = row.textContent.toLowerCase();
+                    
+                    for (const keyword of keywordsLower) {
+                        if (rowText.includes(keyword)) {
+                            // Look for numbers in cells (skip first cell which is usually label)
+                            for (let i = 1; i < cells.length; i++) {
+                                const cellText = cells[i].textContent.trim();
+                                const num = parseNumber(cellText);
+                                if (num !== null && Math.abs(num) > 0) {
+                                    return num;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        function extractCompanyInfo(html) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const text = doc.body.textContent;
+            
+            // Company name
+            let name = 'Unknown';
+            const namePatterns = [
+                /FORM\s+10-Q[^]*?([A-Z][A-Za-z\s&,\.]+(?:Inc\.|Corporation|Corp\.|LLC|Company|Co\.))/i,
+                /([A-Z][A-Za-z\s&]+(?:Inc\.|Corporation|Corp\.|LLC|Company|Co\.))/,
+            ];
+            
+            for (const pattern of namePatterns) {
+                const match = text.substring(0, 10000).match(pattern);
+                if (match && match[1].length > 3 && match[1].length < 60) {
+                    name = match[1].trim().replace(/\s+/g, ' ');
+                    break;
+                }
+            }
+            
+            // Filing period
+            let period = 'N/A';
+            const periodMatch = text.match(/(?:QUARTER(?:LY)?|PERIOD)\s+ENDED?\s+(\w+\s+\d{1,2},?\s+\d{4})/i);
+            if (periodMatch) {
+                period = periodMatch[1];
+            }
+            
+            // CIK
+            let cik = 'N/A';
+            const cikMatch = text.match(/CIK[:\s]+(\d+)/i) || text.match(/edgar\/data\/(\d+)/i);
+            if (cikMatch) {
+                cik = cikMatch[1];
+            }
+            
+            return { name, period, cik };
+        }
+
+        function analyzeHTML(html, url) {
+            const info = extractCompanyInfo(html);
+            
+            const financials = {
+                // Income Statement
+                revenue: extractFromTables(html, ['total revenues', 'net revenues', 'total net revenues', 'net sales', 'total sales']),
+                netIncome: extractFromTables(html, ['net income', 'net income (loss)', 'net earnings', 'net income attributable']),
+                operatingIncome: extractFromTables(html, ['income from operations', 'operating income', 'operating income (loss)']),
+                grossProfit: extractFromTables(html, ['gross profit', 'gross margin']),
+                
+                // Balance Sheet
+                totalAssets: extractFromTables(html, ['total assets']),
+                cash: extractFromTables(html, ['cash and cash equivalents', 'cash, cash equivalents']),
+                marketableSecurities: extractFromTables(html, ['marketable securities', 'short-term investments']),
+                currentAssets: extractFromTables(html, ['total current assets']),
+                totalLiabilities: extractFromTables(html, ['total liabilities']),
+                currentLiabilities: extractFromTables(html, ['total current liabilities']),
+                longTermDebt: extractFromTables(html, ['long-term debt', 'long-term notes']),
+                totalEquity: extractFromTables(html, ["total stockholders' equity", "total shareholders' equity", 'total equity']),
+                
+                // Cash Flow
+                operatingCF: extractFromTables(html, ['cash provided by operating', 'net cash from operating', 'operating activities']),
+                investingCF: extractFromTables(html, ['cash used in investing', 'net cash from investing', 'investing activities']),
+                financingCF: extractFromTables(html, ['cash used in financing', 'net cash from financing', 'financing activities']),
+                capex: extractFromTables(html, ['capital expenditures', 'purchases of property', 'property and equipment']),
+            };
+            
+            // Calculated metrics
+            if (financials.operatingCF && financials.capex) {
+                financials.freeCashFlow = financials.operatingCF - Math.abs(financials.capex);
+            }
+            
+            if (financials.revenue && financials.netIncome) {
+                financials.netMargin = (financials.netIncome / financials.revenue) * 100;
+            }
+            
+            if (financials.currentAssets && financials.currentLiabilities && financials.currentLiabilities !== 0) {
+                financials.currentRatio = financials.currentAssets / financials.currentLiabilities;
+            }
+            
+            if (financials.longTermDebt && financials.totalAssets && financials.totalAssets !== 0) {
+                financials.debtToAssets = (financials.longTermDebt / financials.totalAssets) * 100;
+            }
+            
+            if (financials.cash && financials.longTermDebt) {
+                financials.netCash = financials.cash - financials.longTermDebt;
+            }
+            
+            return {
+                name: info.name,
+                period: info.period,
+                cik: info.cik,
+                url: url,
+                financials: financials
+            };
+        }
+
+        async function analyzeAll() {
+            const urls = [
+                document.getElementById('url1').value.trim(),
+                document.getElementById('url2').value.trim(),
+                document.getElementById('url3').value.trim()
+            ];
+            
+            if (urls.some(u => !u)) {
+                alert('Please enter all 3 URLs');
+                return;
+            }
+            
+            document.getElementById('analyzeBtn').disabled = true;
+            document.getElementById('loading').classList.add('visible');
+            document.getElementById('results').classList.remove('visible');
+            
+            analysisResults = [];
+            
+            for (let i = 0; i < 3; i++) {
+                const statusEl = document.getElementById(`status${i + 1}`);
+                const html = await fetchHTML(urls[i], statusEl);
+                
+                if (html) {
+                    const result = analyzeHTML(html, urls[i]);
+                    analysisResults.push(result);
+                } else {
+                    analysisResults.push({
+                        name: `Company ${i + 1} (Failed)`,
+                        period: 'N/A',
+                        cik: 'N/A',
+                        url: urls[i],
+                        financials: {}
+                    });
+                }
+            }
+            
+            document.getElementById('loading').classList.remove('visible');
+            document.getElementById('analyzeBtn').disabled = false;
+            
+            displayResults();
+        }
+
+        function fmt(val, decimals = 0) {
+            if (val === null || val === undefined) return '<span class="na">N/A</span>';
+            
+            const absVal = Math.abs(val);
+            let formatted;
+            let suffix = '';
+            
+            if (absVal >= 1000000) {
+                formatted = (val / 1000000).toFixed(1);
+                suffix = 'T';
+            } else if (absVal >= 1000) {
+                formatted = (val / 1000).toFixed(1);
+                suffix = 'B';
+            } else {
+                formatted = val.toFixed(decimals);
+                suffix = 'M';
+            }
+            
+            const cls = val < 0 ? 'negative' : 'positive';
+            return `<span class="${cls}">$${formatted}${suffix}</span>`;
+        }
+
+        function fmtPct(val) {
+            if (val === null || val === undefined) return '<span class="na">N/A</span>';
+            const cls = val < 0 ? 'negative' : 'positive';
+            return `<span class="${cls}">${val.toFixed(1)}%</span>`;
+        }
+
+        function fmtRatio(val) {
+            if (val === null || val === undefined) return '<span class="na">N/A</span>';
+            const cls = val < 1 ? 'negative' : 'positive';
+            return `<span class="${cls}">${val.toFixed(2)}</span>`;
+        }
+
+        function displayResults() {
+            const cos = analysisResults;
+            
+            // Update headers
+            ['i', 'b', 'c', 'r'].forEach(prefix => {
+                for (let i = 0; i < 3; i++) {
+                    document.getElementById(`${prefix}-h${i + 1}`).textContent = cos[i].name.substring(0, 18);
+                }
+            });
+            
+            // Overview
+            document.querySelector('#overviewTable tbody').innerHTML = cos.map((c, i) => `
+                <tr><td>${i + 1}</td><td>${c.name}</td><td>${c.period}</td><td>${c.cik}</td></tr>
+            `).join('');
+            
+            // Income Statement
+            const incomeMetrics = [
+                ['Revenue', 'revenue'],
+                ['Net Income', 'netIncome'],
+                ['Operating Income', 'operatingIncome'],
+                ['Gross Profit', 'grossProfit'],
+                ['Net Margin', 'netMargin', 'pct'],
+            ];
+            
+            document.querySelector('#incomeTable tbody').innerHTML = incomeMetrics.map(([label, key, type]) => `
+                <tr>
+                    <td class="metric-name">${label}</td>
+                    ${cos.map(c => `<td>${type === 'pct' ? fmtPct(c.financials[key]) : fmt(c.financials[key])}</td>`).join('')}
+                </tr>
+            `).join('');
+            
+            // Balance Sheet
+            const balanceMetrics = [
+                ['Total Assets', 'totalAssets'],
+                ['Cash & Equivalents', 'cash'],
+                ['Marketable Securities', 'marketableSecurities'],
+                ['Current Assets', 'currentAssets'],
+                ['Total Liabilities', 'totalLiabilities'],
+                ['Current Liabilities', 'currentLiabilities'],
+                ['Long-Term Debt', 'longTermDebt'],
+                ['Total Equity', 'totalEquity'],
+            ];
+            
+            document.querySelector('#balanceTable tbody').innerHTML = balanceMetrics.map(([label, key]) => `
+                <tr>
+                    <td class="metric-name">${label}</td>
+                    ${cos.map(c => `<td>${fmt(c.financials[key])}</td>`).join('')}
+                </tr>
+            `).join('');
+            
+            // Cash Flow
+            const cfMetrics = [
+                ['Operating Cash Flow', 'operatingCF'],
+                ['Investing Cash Flow', 'investingCF'],
+                ['Financing Cash Flow', 'financingCF'],
+                ['Capital Expenditures', 'capex'],
+                ['Free Cash Flow', 'freeCashFlow'],
+            ];
+            
+            document.querySelector('#cashflowTable tbody').innerHTML = cfMetrics.map(([label, key]) => `
+                <tr>
+                    <td class="metric-name">${label}</td>
+                    ${cos.map(c => `<td>${fmt(c.financials[key])}</td>`).join('')}
+                </tr>
+            `).join('');
+            
+            // Ratios
+            const ratioMetrics = [
+                ['Current Ratio', 'currentRatio', 'ratio'],
+                ['Debt-to-Assets', 'debtToAssets', 'pct'],
+                ['Net Cash Position', 'netCash', 'num'],
+            ];
+            
+            document.querySelector('#ratiosTable tbody').innerHTML = ratioMetrics.map(([label, key, type]) => `
+                <tr>
+                    <td class="metric-name">${label}</td>
+                    ${cos.map(c => `<td>${type === 'pct' ? fmtPct(c.financials[key]) : type === 'ratio' ? fmtRatio(c.financials[key]) : fmt(c.financials[key])}</td>`).join('')}
+                </tr>
+            `).join('');
+            
+            // Summary
+            const summaries = [];
+            const validAssets = cos.filter(c => c.financials.totalAssets);
+            if (validAssets.length) {
+                const best = validAssets.reduce((a, b) => (a.financials.totalAssets || 0) > (b.financials.totalAssets || 0) ? a : b);
+                summaries.push({ title: '🏆 Largest by Assets', text: `${best.name}` });
+            }
+            
+            const validRev = cos.filter(c => c.financials.revenue);
+            if (validRev.length) {
+                const best = validRev.reduce((a, b) => (a.financials.revenue || 0) > (b.financials.revenue || 0) ? a : b);
+                summaries.push({ title: '💰 Highest Revenue', text: `${best.name}` });
+            }
+            
+            const validMargin = cos.filter(c => c.financials.netMargin);
+            if (validMargin.length) {
+                const best = validMargin.reduce((a, b) => (a.financials.netMargin || -999) > (b.financials.netMargin || -999) ? a : b);
+                summaries.push({ title: '📈 Best Net Margin', text: `${best.name} (${best.financials.netMargin.toFixed(1)}%)` });
+            }
+            
+            document.getElementById('summaryCards').innerHTML = summaries.map(s => `
+                <div class="summary-card"><h4>${s.title}</h4><p>${s.text}</p></div>
+            `).join('');
+            
+            // Red Flags
+            const flags = [];
+            for (const c of cos) {
+                const f = [];
+                if (c.financials.freeCashFlow < 0) f.push(`Negative FCF`);
+                if (c.financials.debtToAssets > 50) f.push(`High debt (${c.financials.debtToAssets?.toFixed(0)}%)`);
+                if (c.financials.currentRatio < 1) f.push(`Low current ratio`);
+                if (f.length) flags.push({ company: c.name, flags: f });
+            }
+            
+            document.getElementById('redFlags').innerHTML = flags.length ? flags.map(f => `
+                <div class="summary-card warning">
+                    <h4>⚠️ ${f.company.substring(0, 25)}</h4>
+                    ${f.flags.map(fl => `<div class="red-flag">• ${fl}</div>`).join('')}
+                </div>
+            `).join('') : '<div class="summary-card"><h4>✅ No Major Red Flags</h4></div>';
+            
+            document.getElementById('results').classList.add('visible');
+        }
+
+        function exportMarkdown() {
+            const cos = analysisResults;
+            let md = `# 10-Q Comparison Report\n\n`;
+            md += `Generated: ${new Date().toLocaleString()}\n\n`;
+            md += `## Companies\n`;
+            cos.forEach((c, i) => md += `${i + 1}. **${c.name}** - ${c.period}\n`);
+            md += `\n## Key Metrics\n`;
+            md += `| Metric | ${cos.map(c => c.name.substring(0, 15)).join(' | ')} |\n`;
+            md += `|--------|${cos.map(() => '---').join('|')}|\n`;
+            md += `| Revenue | ${cos.map(c => c.financials.revenue ? `$${(c.financials.revenue/1000).toFixed(1)}B` : 'N/A').join(' | ')} |\n`;
+            md += `| Net Income | ${cos.map(c => c.financials.netIncome ? `$${(c.financials.netIncome/1000).toFixed(1)}B` : 'N/A').join(' | ')} |\n`;
+            
+            const blob = new Blob([md], { type: 'text/markdown' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = '10q_comparison.md';
+            a.click();
+        }
+
+        function exportJSON() {
+            const blob = new Blob([JSON.stringify({ generated: new Date().toISOString(), companies: analysisResults }, null, 2)], { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = '10q_comparison.json';
+            a.click();
+        }
+
+        function exportCSV() {
+            const cos = analysisResults;
+            let csv = 'Metric,' + cos.map(c => `"${c.name}"`).join(',') + '\n';
+            const metrics = ['revenue', 'netIncome', 'operatingIncome', 'totalAssets', 'cash', 'totalLiabilities', 'longTermDebt', 'totalEquity', 'operatingCF', 'freeCashFlow', 'netMargin', 'currentRatio'];
+            metrics.forEach(m => {
+                csv += `${m},${cos.map(c => c.financials[m] ?? '').join(',')}\n`;
+            });
+            
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = '10q_comparison.csv';
+            a.click();
+        }
+    </script>
+</body>
+</html>
+
