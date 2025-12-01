@@ -560,19 +560,52 @@
             return bestScore > 0 ? bestTable : null;
         }
 
-        // Find which column index corresponds to the filing year (e.g., 2025)
-        function findYearColumnIndex(rows, targetYear) {
-            // Look through header rows to find the column with the target year
+        // Find the column index for "Three Months Ended [target date]" with the target year
+        // SEC 10-Q tables typically have: Label | 3mo 2024 | 3mo 2025 | 9mo 2024 | 9mo 2025
+        // We want the "Three Months" column for the filing year (quarterly data)
+        function findQuarterlyColumnIndex(rows, targetYear) {
+            // Look through header rows
             for (const row of rows.slice(0, 10)) {
                 const cells = Array.from(row.querySelectorAll('td, th'));
-                for (let i = 0; i < cells.length; i++) {
-                    const cellText = cells[i].textContent;
-                    if (cellText.includes(targetYear.toString())) {
-                        return i;
+                const rowText = row.textContent.toLowerCase();
+                
+                // Check if this row has "three months" header
+                if (rowText.includes('three months')) {
+                    // Find the column with target year under "three months"
+                    for (let i = 0; i < cells.length; i++) {
+                        const cellText = cells[i].textContent.toLowerCase();
+                        if (cellText.includes('three months') && cellText.includes(targetYear.toString())) {
+                            return i;
+                        }
                     }
                 }
             }
-            return -1; // Not found
+            
+            // Fallback: look for any column with the target year (prefer earlier columns = quarterly)
+            for (const row of rows.slice(0, 10)) {
+                const cells = Array.from(row.querySelectorAll('td, th'));
+                let firstYearCol = -1;
+                
+                for (let i = 0; i < cells.length; i++) {
+                    const cellText = cells[i].textContent;
+                    if (cellText.includes(targetYear.toString())) {
+                        // Skip if this is clearly a "nine months" column
+                        if (cellText.toLowerCase().includes('nine months')) continue;
+                        
+                        if (firstYearCol === -1) {
+                            firstYearCol = i;
+                        }
+                        // If we find "three months" with the year, use that
+                        if (cellText.toLowerCase().includes('three months')) {
+                            return i;
+                        }
+                    }
+                }
+                
+                if (firstYearCol !== -1) return firstYearCol;
+            }
+            
+            return -1;
         }
 
         // Extract value from table, using the correct column for the filing period
@@ -582,31 +615,39 @@
             const rows = Array.from(table.querySelectorAll('tr'));
             const keywordsLower = keywords.map(k => k.toLowerCase().trim());
             
-            // Determine the target year from the filing period (e.g., "September 30, 2025" -> 2025)
-            let targetYear = null;
-            if (periodDate && periodDate.year) {
-                targetYear = periodDate.year;
+            // Determine the target year from the filing period
+            let targetYear = periodDate?.year || new Date().getFullYear();
+            
+            // Find the quarterly column for the target year
+            let quarterlyColumnIndex = findQuarterlyColumnIndex(rows, targetYear);
+            
+            // Build a map of which columns are "three months" vs "nine months"
+            let columnTypes = {}; // index -> 'three' or 'nine'
+            for (const row of rows.slice(0, 10)) {
+                const cells = Array.from(row.querySelectorAll('td, th'));
+                for (let i = 0; i < cells.length; i++) {
+                    const cellText = cells[i].textContent.toLowerCase();
+                    if (cellText.includes('three months')) {
+                        columnTypes[i] = 'three';
+                    } else if (cellText.includes('nine months')) {
+                        columnTypes[i] = 'nine';
+                    }
+                }
             }
-            
-            // Find which column has the target year
-            let yearColumnIndex = targetYear ? findYearColumnIndex(rows, targetYear) : -1;
-            
-            console.log(`Looking for year ${targetYear}, found column index: ${yearColumnIndex}`);
             
             for (const row of rows) {
                 const cells = Array.from(row.querySelectorAll('td, th'));
                 if (cells.length < 2) continue;
                 
-                // Get label from first cell(s) - combine first 1-2 cells for the label
+                // Get label from first cell(s)
                 let labelText = '';
                 let labelEndIndex = 0;
                 for (let i = 0; i < Math.min(2, cells.length); i++) {
                     const cellContent = cells[i].textContent.trim();
-                    // If cell has mostly text (not a number), it's part of the label
-                    if (cellContent && !/^[\d,$().\-—–]+$/.test(cellContent.replace(/\s/g, ''))) {
+                    if (cellContent && !/^[\d,$().\-—–\s]+$/.test(cellContent)) {
                         labelText += ' ' + cellContent.toLowerCase();
                         labelEndIndex = i;
-                    } else {
+                    } else if (labelText) {
                         break;
                     }
                 }
@@ -618,9 +659,8 @@
                 
                 for (const keyword of keywordsLower) {
                     if (labelText.includes(keyword)) {
-                        // Calculate match quality - prefer exact/early matches
                         const idx = labelText.indexOf(keyword);
-                        const score = (keyword.length * 10) - idx; // Longer keywords + earlier position = better
+                        const score = (keyword.length * 10) - idx;
                         
                         if (score > matchScore) {
                             matchScore = score;
@@ -631,38 +671,36 @@
                 
                 if (!matchedKeyword) continue;
                 
-                // For "total" keywords, make sure "total" is actually in the label
+                // For "total" keywords, verify "total" is in the label
                 if (matchedKeyword.includes('total') && !labelText.includes('total')) {
                     continue;
                 }
                 
-                console.log(`Matched "${matchedKeyword}" in row: "${labelText.substring(0, 50)}"`);
-                
-                // PRIORITY 1: Use the year column if we found it
-                if (yearColumnIndex >= 0 && yearColumnIndex < cells.length) {
-                    const num = parseNumber(cells[yearColumnIndex].textContent);
+                // PRIORITY 1: Use the identified quarterly column
+                if (quarterlyColumnIndex >= 0 && quarterlyColumnIndex < cells.length) {
+                    const num = parseNumber(cells[quarterlyColumnIndex].textContent);
                     if (num !== null) {
-                        console.log(`  -> Found value ${num} in year column ${yearColumnIndex}`);
                         return num * multiplier;
                     }
                 }
                 
-                // PRIORITY 2: Look for the LAST numeric column (usually the most recent period)
-                // SEC filings typically have: Label | Prior Year | Current Year
-                let lastValidNum = null;
-                let lastValidIndex = -1;
-                
+                // PRIORITY 2: Find the first "three months" column with target year that has a value
                 for (let i = labelEndIndex + 1; i < cells.length; i++) {
+                    // Skip "nine months" columns
+                    if (columnTypes[i] === 'nine') continue;
+                    
                     const num = parseNumber(cells[i].textContent);
                     if (num !== null) {
-                        lastValidNum = num;
-                        lastValidIndex = i;
+                        return num * multiplier;
                     }
                 }
                 
-                if (lastValidNum !== null) {
-                    console.log(`  -> Found value ${lastValidNum} in last column ${lastValidIndex}`);
-                    return lastValidNum * multiplier;
+                // PRIORITY 3: Just get the first numeric value after the label
+                for (let i = labelEndIndex + 1; i < cells.length; i++) {
+                    const num = parseNumber(cells[i].textContent);
+                    if (num !== null) {
+                        return num * multiplier;
+                    }
                 }
             }
             
