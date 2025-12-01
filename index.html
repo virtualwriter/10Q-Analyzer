@@ -483,29 +483,63 @@
             if (rows.length < 3) return -100;
             if (rows.length > 150) score -= 10;
             
+            // CRITICAL: Skip table of contents - they have "page" and many "note X" entries
+            if (text.includes('table of contents') || text.includes('index')) {
+                return -100;
+            }
+            
+            // Skip if this looks like a TOC (has "page" header and numbered notes)
+            const hasPageColumn = text.includes('page') && (text.match(/note\s+\d/g) || []).length > 3;
+            if (hasPageColumn) {
+                return -100;
+            }
+            
+            // Skip if it contains "part i" and "part ii" (cover page TOC)
+            if (text.includes('part i') && text.includes('part ii')) {
+                return -100;
+            }
+            
             if (statementType === 'income') {
-                if (text.includes('condensed consolidated statements of operations')) score += 30;
-                if (text.includes('consolidated statements of operations')) score += 25;
-                if (text.includes('statements of operations')) score += 20;
-                if (text.includes('condensed consolidated statements of income')) score += 30;
-                if (text.includes('consolidated statements of income')) score += 25;
-                if (text.includes('total net revenues') || text.includes('total revenues')) score += 15;
-                if (text.includes('net income') && text.includes('revenue')) score += 10;
+                // Must have the actual statement header
+                if (text.includes('condensed consolidated statements of operations') && 
+                    !text.includes('see accompanying notes')) score += 50;
+                if (text.includes('consolidated statements of operations')) score += 40;
+                if (text.includes('statements of operations')) score += 30;
+                if (text.includes('condensed consolidated statements of income')) score += 50;
+                if (text.includes('consolidated statements of income')) score += 40;
+                
+                // Must have actual financial line items (not just mentions)
+                if (text.includes('total net revenues') && text.includes('operating expenses')) score += 20;
+                if (text.includes('cost of revenue') || text.includes('cost of revenues')) score += 10;
+                if (text.includes('gross profit')) score += 10;
+                
+                // Strong indicator: has dollar amounts or numbers in thousands/millions
+                if (text.includes('in millions') || text.includes('in thousands')) score += 15;
+                
             } else if (statementType === 'balance') {
-                if (text.includes('condensed consolidated balance sheet')) score += 30;
-                if (text.includes('consolidated balance sheet')) score += 25;
-                if (text.includes('balance sheet')) score += 20;
-                if (text.includes('total assets') && text.includes('total liabilities')) score += 15;
+                if (text.includes('condensed consolidated balance sheet') && 
+                    !text.includes('see accompanying notes')) score += 50;
+                if (text.includes('consolidated balance sheet')) score += 40;
+                if (text.includes('balance sheet')) score += 30;
+                if (text.includes('total assets') && text.includes('total liabilities')) score += 20;
+                if (text.includes('in millions') || text.includes('in thousands')) score += 15;
+                
             } else if (statementType === 'cashflow') {
-                if (text.includes('condensed consolidated statements of cash flows')) score += 30;
-                if (text.includes('consolidated statements of cash flows')) score += 25;
-                if (text.includes('statements of cash flows')) score += 20;
-                if (text.includes('operating activities') && text.includes('investing activities')) score += 15;
+                if (text.includes('condensed consolidated statements of cash flows') && 
+                    !text.includes('see accompanying notes')) score += 50;
+                if (text.includes('consolidated statements of cash flows')) score += 40;
+                if (text.includes('statements of cash flows')) score += 30;
+                if (text.includes('operating activities') && text.includes('investing activities')) score += 20;
+                if (text.includes('in millions') || text.includes('in thousands')) score += 15;
             }
             
             // Penalize notes/schedules
-            if (text.includes('notes to') || text.includes('note ')) score -= 15;
-            if (text.includes('schedule of')) score -= 10;
+            if (text.includes('notes to consolidated') || text.includes('notes to condensed')) score -= 20;
+            if (text.includes('schedule of')) score -= 15;
+            
+            // Penalize if it's mostly text (notes) vs numbers
+            const numberMatches = text.match(/[\d,]+/g) || [];
+            if (numberMatches.length < 10) score -= 10;
             
             return score;
         }
