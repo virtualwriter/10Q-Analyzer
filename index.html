@@ -427,45 +427,73 @@
         function detectMultiplier(tableText) {
             const text = tableText.toLowerCase();
             
-            console.log(`detectMultiplier: Scanning ${text.length} chars`);
+            // Extract just the header area (first 2000 chars usually has the unit indicator)
+            const headerArea = text.substring(0, 2000);
             
-            // THOUSANDS -> multiply by 0.001 to convert to millions
-            // Look for common patterns anywhere in the table
-            if (text.includes('in thousands') || text.includes('(thousands)') ||
-                text.includes('$ thousands') || text.includes('except per share') ||
-                text.includes('except share') || text.includes('except per-share')) {
-                console.log(`  -> Detected THOUSANDS, multiplier = 0.001`);
-                return 0.001;
+            // THOUSANDS patterns - be very comprehensive
+            const thousandsPatterns = [
+                'in thousands',
+                '(in thousands',
+                'thousands)',
+                '$ thousands',
+                'dollars in thousands',
+                ', except per share',
+                ', except share',
+                'except per share',
+                'per share data'
+            ];
+            
+            for (const pattern of thousandsPatterns) {
+                if (headerArea.includes(pattern)) {
+                    console.log(`  -> Detected THOUSANDS (pattern: "${pattern}")`);
+                    return 0.001;
+                }
             }
             
-            // MILLIONS -> already in millions, multiplier = 1
-            if (text.includes('in millions') || text.includes('(millions)') ||
-                text.includes('$ millions')) {
-                console.log(`  -> Detected MILLIONS, multiplier = 1`);
-                return 1;
+            // MILLIONS patterns
+            const millionsPatterns = [
+                'in millions',
+                '(in millions',
+                'millions)',
+                '$ millions',
+                'dollars in millions'
+            ];
+            
+            for (const pattern of millionsPatterns) {
+                if (headerArea.includes(pattern)) {
+                    console.log(`  -> Detected MILLIONS (pattern: "${pattern}")`);
+                    return 1;
+                }
             }
             
-            // BILLIONS -> multiply by 1000 to convert to millions
-            if (text.includes('in billions') || text.includes('(billions)')) {
-                console.log(`  -> Detected BILLIONS, multiplier = 1000`);
+            // BILLIONS patterns
+            if (headerArea.includes('in billions') || headerArea.includes('(billions)')) {
+                console.log(`  -> Detected BILLIONS`);
                 return 1000;
             }
             
-            // Heuristic: If numbers in the table are large (>10000), likely thousands
-            // If numbers are smaller (<5000), likely millions
+            // Heuristic: Look at the actual numbers in the table
+            // If we see numbers like 271,713 or 192,600, it's likely thousands
+            // If we see numbers like 1,274 or 470, it's likely millions
             const numbers = text.match(/[\d,]+/g) || [];
-            const largeNumbers = numbers.filter(n => {
-                const val = parseInt(n.replace(/,/g, ''));
-                return val > 10000 && val < 10000000;
-            });
+            let largeCount = 0;
+            let smallCount = 0;
             
-            if (largeNumbers.length > 5) {
-                console.log(`  -> Heuristic: Found ${largeNumbers.length} large numbers, assuming THOUSANDS`);
+            for (const numStr of numbers.slice(0, 50)) { // Check first 50 numbers
+                const val = parseInt(numStr.replace(/,/g, ''));
+                if (val >= 100000 && val < 100000000) largeCount++;
+                if (val >= 100 && val < 10000) smallCount++;
+            }
+            
+            console.log(`  -> Heuristic: ${largeCount} large numbers, ${smallCount} small numbers`);
+            
+            if (largeCount > smallCount && largeCount >= 3) {
+                console.log(`  -> Assuming THOUSANDS based on number sizes`);
                 return 0.001;
             }
             
-            // Default: assume MILLIONS
-            console.log(`  -> No unit indicator found, defaulting to MILLIONS`);
+            // Default: assume MILLIONS (common for large companies like Robinhood)
+            console.log(`  -> Defaulting to MILLIONS`);
             return 1;
         }
 
