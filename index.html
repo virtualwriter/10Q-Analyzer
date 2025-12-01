@@ -427,35 +427,33 @@
         function detectMultiplier(tableText) {
             const text = tableText.toLowerCase();
             
-            console.log(`Detecting multiplier. Text sample: "${text.substring(0, 500)}"`);
+            // Look for the unit indicator - usually in first few hundred chars
+            const headerText = text.substring(0, 1500);
             
-            // Check for explicit indicators - be very thorough
             // THOUSANDS -> multiply by 0.001 to convert to millions
-            if (text.includes('in thousands') || text.includes('(in thousands') || 
-                text.includes('$ in thousands') || text.includes('dollars in thousands') ||
-                text.includes('amounts in thousands') || text.includes('except share') ||
-                text.includes('except per share') || text.includes(', except')) {
-                console.log(`  -> Detected THOUSANDS, multiplier = 0.001`);
-                return 0.001; // Convert thousands to millions
+            // Common patterns: "(in thousands)", "in thousands, except", "$ in thousands"
+            if (headerText.includes('in thousands') || headerText.includes('(thousands)') ||
+                headerText.includes('$ thousands')) {
+                console.log(`  -> Detected THOUSANDS`);
+                return 0.001;
             }
             
             // MILLIONS -> already in millions, multiplier = 1
-            if (text.includes('in millions') || text.includes('(in millions') || 
-                text.includes('$ in millions') || text.includes('dollars in millions') ||
-                text.includes('amounts in millions')) {
-                console.log(`  -> Detected MILLIONS, multiplier = 1`);
-                return 1; // Already in millions
+            if (headerText.includes('in millions') || headerText.includes('(millions)') ||
+                headerText.includes('$ millions')) {
+                console.log(`  -> Detected MILLIONS`);
+                return 1;
             }
             
             // BILLIONS -> multiply by 1000 to convert to millions
-            if (text.includes('in billions') || text.includes('(in billions')) {
-                console.log(`  -> Detected BILLIONS, multiplier = 1000`);
-                return 1000; // Convert billions to millions
+            if (headerText.includes('in billions') || headerText.includes('(billions)')) {
+                console.log(`  -> Detected BILLIONS`);
+                return 1000;
             }
             
-            // Default: assume thousands (safer for most 10-Q filings)
-            console.log(`  -> No explicit indicator found, defaulting to THOUSANDS (0.001)`);
-            return 0.001;
+            // Default: assume MILLIONS (most common for large companies)
+            console.log(`  -> No unit indicator found, defaulting to MILLIONS`);
+            return 1;
         }
 
         // Find the column index that matches the filing period
@@ -658,114 +656,71 @@
                 }
             }
             
-            // First pass: look for EXACT or START-WITH matches (strict)
-            for (const row of rows) {
-                const cells = Array.from(row.querySelectorAll('td, th'));
-                if (cells.length < 2) continue;
-                
-                // Get label from first cell(s) - clean it up
-                let labelText = '';
-                let labelEndIndex = 0;
-                for (let i = 0; i < Math.min(2, cells.length); i++) {
-                    const cellContent = cells[i].textContent.trim().replace(/\s+/g, ' ');
-                    if (cellContent && !/^[\d,$().\-—–\s]+$/.test(cellContent)) {
-                        labelText += ' ' + cellContent.toLowerCase();
-                        labelEndIndex = i;
-                    } else if (labelText) {
-                        break;
-                    }
-                }
-                labelText = labelText.trim();
-                
-                // STRICT MATCHING: Label must START WITH the keyword or be very close
-                let matchedKeyword = null;
-                
-                for (const keyword of keywordsLower) {
-                    // Check if label STARTS WITH keyword (best match)
-                    if (labelText.startsWith(keyword)) {
-                        matchedKeyword = keyword;
-                        break; // Best possible match
-                    }
-                    // Check if label equals keyword exactly
-                    if (labelText === keyword) {
-                        matchedKeyword = keyword;
-                        break;
-                    }
-                }
-                
-                if (!matchedKeyword) continue;
-                
-                // Extract value from the correct column
-                // PRIORITY 1: Use the identified quarterly column
-                if (quarterlyColumnIndex >= 0 && quarterlyColumnIndex < cells.length) {
-                    const num = parseNumber(cells[quarterlyColumnIndex].textContent);
-                    if (num !== null) {
-                        console.log(`Found ${matchedKeyword}: ${num} * ${multiplier} = ${num * multiplier} (col ${quarterlyColumnIndex})`);
-                        return num * multiplier;
-                    }
-                }
-                
-                // PRIORITY 2: Find the first "three months" column that has a value
-                for (let i = labelEndIndex + 1; i < cells.length; i++) {
-                    if (columnTypes[i] === 'nine') continue; // Skip nine months columns
+            // Search for matching rows - try each keyword in order (first keyword = highest priority)
+            // Keywords are ordered: 'total net revenues' before 'revenues'
+            for (const keyword of keywordsLower) {
+                for (const row of rows) {
+                    const cells = Array.from(row.querySelectorAll('td, th'));
+                    if (cells.length < 2) continue;
                     
-                    const num = parseNumber(cells[i].textContent);
-                    if (num !== null) {
-                        console.log(`Found ${matchedKeyword}: ${num} * ${multiplier} = ${num * multiplier} (col ${i}, three months)`);
-                        return num * multiplier;
-                    }
-                }
-            }
-            
-            // Second pass: looser matching if strict didn't work
-            for (const row of rows) {
-                const cells = Array.from(row.querySelectorAll('td, th'));
-                if (cells.length < 2) continue;
-                
-                let labelText = '';
-                let labelEndIndex = 0;
-                for (let i = 0; i < Math.min(2, cells.length); i++) {
-                    const cellContent = cells[i].textContent.trim().replace(/\s+/g, ' ');
-                    if (cellContent && !/^[\d,$().\-—–\s]+$/.test(cellContent)) {
-                        labelText += ' ' + cellContent.toLowerCase();
-                        labelEndIndex = i;
-                    } else if (labelText) {
-                        break;
-                    }
-                }
-                labelText = labelText.trim();
-                
-                // Looser: label CONTAINS keyword, but keyword must be significant part
-                let matchedKeyword = null;
-                for (const keyword of keywordsLower) {
-                    if (labelText.includes(keyword)) {
-                        // Reject if keyword is just a small part of a longer label
-                        // e.g., "revenues" in "transaction-based revenues" - reject
-                        // but "total net revenues" in "total net revenues" - accept
-                        const keywordRatio = keyword.length / labelText.length;
-                        if (keywordRatio > 0.5) { // Keyword must be >50% of label
-                            matchedKeyword = keyword;
-                            break;
+                    // Get label from first cell(s)
+                    let labelText = '';
+                    let labelEndIndex = 0;
+                    for (let i = 0; i < Math.min(3, cells.length); i++) {
+                        const cellContent = cells[i].textContent.trim().replace(/\s+/g, ' ').toLowerCase();
+                        // Stop if we hit a number cell
+                        if (/^[\d,$().\-—–\s]*$/.test(cellContent) && cellContent.length > 0) {
+                            if (labelText) break;
+                            continue;
+                        }
+                        if (cellContent) {
+                            labelText += ' ' + cellContent;
+                            labelEndIndex = i;
                         }
                     }
-                }
-                
-                if (!matchedKeyword) continue;
-                
-                // Extract value
-                if (quarterlyColumnIndex >= 0 && quarterlyColumnIndex < cells.length) {
-                    const num = parseNumber(cells[quarterlyColumnIndex].textContent);
-                    if (num !== null) {
-                        console.log(`Found (loose) ${matchedKeyword}: ${num} * ${multiplier} = ${num * multiplier}`);
-                        return num * multiplier;
+                    labelText = labelText.trim();
+                    if (!labelText) continue;
+                    
+                    // Check if this row matches the current keyword
+                    // Must be a strong match - keyword should be the main content
+                    const keywordIndex = labelText.indexOf(keyword);
+                    if (keywordIndex === -1) continue;
+                    
+                    // For "total" keywords, the label must contain "total"
+                    if (keyword.includes('total') && !labelText.includes('total')) continue;
+                    
+                    // Reject if keyword is buried in a longer phrase
+                    // e.g., "transaction-based revenues" should NOT match "revenues"
+                    // but "total net revenues" SHOULD match "total net revenues"
+                    if (keyword === 'revenues' || keyword === 'revenue') {
+                        // Only match if "revenues"/"revenue" is at the END of the label
+                        // or the label is very short
+                        if (!labelText.endsWith('revenues') && !labelText.endsWith('revenue') && labelText.length > 20) {
+                            continue;
+                        }
                     }
-                }
-                
-                for (let i = labelEndIndex + 1; i < cells.length; i++) {
-                    if (columnTypes[i] === 'nine') continue;
-                    const num = parseNumber(cells[i].textContent);
-                    if (num !== null) {
-                        return num * multiplier;
+                    
+                    console.log(`Matched "${keyword}" in label: "${labelText}"`);
+                    
+                    // Extract value from the correct column
+                    // PRIORITY 1: Use the identified quarterly column
+                    if (quarterlyColumnIndex >= 0 && quarterlyColumnIndex < cells.length) {
+                        const num = parseNumber(cells[quarterlyColumnIndex].textContent);
+                        if (num !== null) {
+                            console.log(`  -> Value: ${num} * ${multiplier} = ${num * multiplier} (col ${quarterlyColumnIndex})`);
+                            return num * multiplier;
+                        }
+                    }
+                    
+                    // PRIORITY 2: Find first numeric column after label, skipping "nine months"
+                    for (let i = labelEndIndex + 1; i < cells.length; i++) {
+                        if (columnTypes[i] === 'nine') continue;
+                        
+                        const num = parseNumber(cells[i].textContent);
+                        if (num !== null) {
+                            console.log(`  -> Value: ${num} * ${multiplier} = ${num * multiplier} (col ${i})`);
+                            return num * multiplier;
+                        }
                     }
                 }
             }
