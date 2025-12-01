@@ -537,51 +537,69 @@
             return bestScore > 0 ? bestTable : null;
         }
 
-        // Find the column index for "Three Months Ended [target date]" with the target year
-        // SEC 10-Q tables typically have: Label | 3mo 2024 | 3mo 2025 | 9mo 2024 | 9mo 2025
-        // We want the "Three Months" column for the filing year (quarterly data)
+        // Find the column index for "Three Months Ended" with the target year
+        // SEC 10-Q tables have headers like:
+        //   Row 1: | Three Months Ended | Three Months Ended | Nine Months Ended | Nine Months Ended |
+        //   Row 2: | Sept 30, 2025      | Sept 30, 2024      | Sept 30, 2025     | Sept 30, 2024     |
+        // We want the "Three Months" column for 2025 (the filing year)
         function findQuarterlyColumnIndex(rows, targetYear) {
-            // Look through header rows
-            for (const row of rows.slice(0, 10)) {
-                const cells = Array.from(row.querySelectorAll('td, th'));
-                const rowText = row.textContent.toLowerCase();
-                
-                // Check if this row has "three months" header
-                if (rowText.includes('three months')) {
-                    // Find the column with target year under "three months"
-                    for (let i = 0; i < cells.length; i++) {
-                        const cellText = cells[i].textContent.toLowerCase();
-                        if (cellText.includes('three months') && cellText.includes(targetYear.toString())) {
-                            return i;
-                        }
-                    }
-                }
-            }
+            console.log(`Looking for quarterly column with year ${targetYear}`);
             
-            // Fallback: look for any column with the target year (prefer earlier columns = quarterly)
-            for (const row of rows.slice(0, 10)) {
+            // Track which columns are "three months" vs "nine months"
+            let threeMonthsCols = [];
+            let nineMonthsCols = [];
+            let yearCols = {}; // colIndex -> year
+            
+            // Scan header rows to identify column types
+            for (const row of rows.slice(0, 15)) {
                 const cells = Array.from(row.querySelectorAll('td, th'));
-                let firstYearCol = -1;
                 
                 for (let i = 0; i < cells.length; i++) {
-                    const cellText = cells[i].textContent;
-                    if (cellText.includes(targetYear.toString())) {
-                        // Skip if this is clearly a "nine months" column
-                        if (cellText.toLowerCase().includes('nine months')) continue;
-                        
-                        if (firstYearCol === -1) {
-                            firstYearCol = i;
-                        }
-                        // If we find "three months" with the year, use that
-                        if (cellText.toLowerCase().includes('three months')) {
-                            return i;
-                        }
+                    const cellText = cells[i].textContent.toLowerCase().trim();
+                    
+                    // Check for "three months" or "nine months"
+                    if (cellText.includes('three months') && !threeMonthsCols.includes(i)) {
+                        threeMonthsCols.push(i);
+                        console.log(`  Col ${i} is THREE MONTHS: "${cellText.substring(0, 50)}"`);
+                    }
+                    if (cellText.includes('nine months') && !nineMonthsCols.includes(i)) {
+                        nineMonthsCols.push(i);
+                        console.log(`  Col ${i} is NINE MONTHS: "${cellText.substring(0, 50)}"`);
+                    }
+                    
+                    // Check for year (2024, 2025, etc.)
+                    const yearMatch = cellText.match(/20\d{2}/);
+                    if (yearMatch && !yearCols[i]) {
+                        yearCols[i] = parseInt(yearMatch[0]);
+                        console.log(`  Col ${i} has year ${yearMatch[0]}: "${cellText.substring(0, 50)}"`);
                     }
                 }
-                
-                if (firstYearCol !== -1) return firstYearCol;
             }
             
+            // PRIORITY 1: Find a "three months" column with the target year
+            for (const col of threeMonthsCols) {
+                if (yearCols[col] === targetYear) {
+                    console.log(`  => Using col ${col} (three months + ${targetYear})`);
+                    return col;
+                }
+            }
+            
+            // PRIORITY 2: Find any column with target year that's NOT nine months
+            for (const [col, year] of Object.entries(yearCols)) {
+                const colNum = parseInt(col);
+                if (year === targetYear && !nineMonthsCols.includes(colNum)) {
+                    console.log(`  => Using col ${colNum} (${targetYear}, not nine months)`);
+                    return colNum;
+                }
+            }
+            
+            // PRIORITY 3: First "three months" column
+            if (threeMonthsCols.length > 0) {
+                console.log(`  => Fallback to first three months col: ${threeMonthsCols[0]}`);
+                return threeMonthsCols[0];
+            }
+            
+            console.log(`  => No quarterly column found, returning -1`);
             return -1;
         }
 
@@ -794,11 +812,17 @@
             
             console.log(`${info.name}: Income multiplier=${incomeMultiplier}, Balance multiplier=${balanceMultiplier}`);
             
+            console.log(`=== Extracting financials for ${info.name} ===`);
+            console.log(`Income table found: ${!!incomeTable}`);
+            console.log(`Income multiplier: ${incomeMultiplier}`);
+            console.log(`Period date: ${JSON.stringify(periodDate)}`);
+            
             const financials = {
-                // Income Statement
+                // Income Statement - order matters! More specific first
                 revenue: extractValueFromTable(incomeTable, [
-                    'total net revenues', 'total revenues', 'net revenues', 'revenues',
-                    'total net sales', 'total sales', 'net sales', 'revenue'
+                    'total net revenues', 'total revenues', 'net revenues',
+                    'total net sales', 'total sales', 'net sales', 
+                    'revenues', 'revenue'
                 ], incomeMultiplier, periodDate),
                 
                 costOfRevenue: extractValueFromTable(incomeTable, [
