@@ -336,6 +336,24 @@
             color: var(--accent-blue);
         }
 
+        .debug-info {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 1rem 0;
+            font-size: 0.75rem;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+            display: none;
+        }
+
+        .debug-info.visible {
+            display: block;
+        }
+
         @media (max-width: 900px) {
             .url-section {
                 grid-template-columns: 1fr;
@@ -413,19 +431,19 @@
                 <tbody></tbody>
             </table>
 
-            <h2 class="section-title">💰 Income Statement (in millions)</h2>
+            <h2 class="section-title">💰 Income Statement (in millions USD)</h2>
             <table id="incomeTable">
                 <thead><tr><th>Metric</th><th id="i-h1">Co 1</th><th id="i-h2">Co 2</th><th id="i-h3">Co 3</th></tr></thead>
                 <tbody></tbody>
             </table>
 
-            <h2 class="section-title">🏦 Balance Sheet (in millions)</h2>
+            <h2 class="section-title">🏦 Balance Sheet (in millions USD)</h2>
             <table id="balanceTable">
                 <thead><tr><th>Metric</th><th id="b-h1">Co 1</th><th id="b-h2">Co 2</th><th id="b-h3">Co 3</th></tr></thead>
                 <tbody></tbody>
             </table>
 
-            <h2 class="section-title">💵 Cash Flow (in millions)</h2>
+            <h2 class="section-title">💵 Cash Flow (in millions USD)</h2>
             <table id="cashflowTable">
                 <thead><tr><th>Metric</th><th id="c-h1">Co 1</th><th id="c-h2">Co 2</th><th id="c-h3">Co 3</th></tr></thead>
                 <tbody></tbody>
@@ -456,24 +474,22 @@
             statusEl.className = 'status loading';
             statusEl.textContent = 'Fetching...';
 
-            // List of CORS proxies to try
             const proxies = [
-                '', // Try direct first
+                '',
                 'https://api.allorigins.win/raw?url=',
                 'https://corsproxy.io/?',
-                'https://cors-anywhere.herokuapp.com/',
             ];
 
             for (const proxy of proxies) {
                 try {
-                    const fetchUrl = proxy + encodeURIComponent(url);
-                    const response = await fetch(proxy ? fetchUrl : url, {
+                    const fetchUrl = proxy ? proxy + encodeURIComponent(url) : url;
+                    const response = await fetch(fetchUrl, {
                         headers: proxy ? {} : { 'Accept': 'text/html' }
                     });
                     
                     if (response.ok) {
                         const html = await response.text();
-                        if (html.length > 1000 && (html.includes('10-Q') || html.includes('FORM') || html.includes('<table'))) {
+                        if (html.length > 1000 && (html.includes('10-Q') || html.includes('10-K') || html.includes('FORM') || html.includes('<table'))) {
                             statusEl.className = 'status success';
                             statusEl.textContent = '✓ Loaded successfully';
                             return html;
@@ -490,11 +506,19 @@
         }
 
         function parseNumber(str) {
-            if (!str || str === '—' || str === '-' || str === 'N/A') return null;
+            if (!str || typeof str !== 'string') return null;
+            str = str.trim();
+            if (str === '' || str === '—' || str === '-' || str === 'N/A' || str === '–' || str === '—') return null;
             
-            let clean = str.replace(/[$,\s]/g, '').trim();
-            const isNegative = clean.includes('(') || clean.startsWith('-');
-            clean = clean.replace(/[()−-]/g, '');
+            // Remove currency symbols, commas, spaces
+            let clean = str.replace(/[$€£¥,\s]/g, '');
+            
+            // Check for parentheses or leading minus (negative)
+            const isNegative = clean.includes('(') || clean.startsWith('-') || clean.includes('−');
+            clean = clean.replace(/[()−\-]/g, '');
+            
+            // Must be a valid number
+            if (!/^\d+\.?\d*$/.test(clean)) return null;
             
             const num = parseFloat(clean);
             if (isNaN(num)) return null;
@@ -502,69 +526,179 @@
             return isNegative ? -num : num;
         }
 
-        function extractFromTables(html, keywords) {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-            const tables = doc.querySelectorAll('table');
+        // Detect the multiplier from table headers/context (thousands, millions, billions)
+        function detectMultiplier(tableText) {
+            const text = tableText.toLowerCase();
+            if (text.includes('in billions') || text.includes('(billions)')) return 1000; // Convert to millions
+            if (text.includes('in thousands') || text.includes('(thousands)') || text.includes('$ in thousands')) return 0.001; // Convert to millions
+            if (text.includes('in millions') || text.includes('(millions)') || text.includes('$ in millions')) return 1;
+            // Default: assume millions for large companies
+            return 1;
+        }
+
+        // Score how likely a table is to be a financial statement
+        function scoreFinancialTable(table, statementType) {
+            let score = 0;
+            const text = table.textContent.toLowerCase();
+            const rows = table.querySelectorAll('tr');
             
-            const keywordsLower = keywords.map(k => k.toLowerCase());
+            // Must have reasonable structure
+            if (rows.length < 3) return 0;
+            if (rows.length > 100) score -= 5; // Too many rows = probably notes
+            
+            // Check for statement-specific keywords
+            if (statementType === 'income') {
+                if (text.includes('consolidated statements of income') || 
+                    text.includes('consolidated statements of operations') ||
+                    text.includes('condensed consolidated statements of income') ||
+                    text.includes('condensed consolidated statements of operations')) score += 20;
+                if (text.includes('revenue') && text.includes('net income')) score += 10;
+                if (text.includes('three months ended') || text.includes('nine months ended')) score += 5;
+            } else if (statementType === 'balance') {
+                if (text.includes('consolidated balance sheet') ||
+                    text.includes('condensed consolidated balance sheet')) score += 20;
+                if (text.includes('total assets') && text.includes('total liabilities')) score += 10;
+            } else if (statementType === 'cashflow') {
+                if (text.includes('consolidated statements of cash flows') ||
+                    text.includes('condensed consolidated statements of cash flows')) score += 20;
+                if (text.includes('operating activities') && text.includes('investing activities')) score += 10;
+            }
+            
+            // Penalize if it looks like notes/schedules
+            if (text.includes('note ') || text.includes('schedule ')) score -= 10;
+            if (text.includes('fair value') && statementType !== 'balance') score -= 5;
+            
+            // Check for dollar amounts (good sign)
+            const dollarMatches = text.match(/\$[\d,]+/g);
+            if (dollarMatches && dollarMatches.length > 5) score += 5;
+            
+            return score;
+        }
+
+        // Find the best table for a given statement type
+        function findBestTable(doc, statementType) {
+            const tables = doc.querySelectorAll('table');
+            let bestTable = null;
+            let bestScore = -Infinity;
             
             for (const table of tables) {
-                const rows = table.querySelectorAll('tr');
+                const score = scoreFinancialTable(table, statementType);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestTable = table;
+                }
+            }
+            
+            return bestScore > 0 ? bestTable : null;
+        }
+
+        // Extract a value from a specific table
+        function extractValueFromTable(table, keywords, multiplier = 1) {
+            if (!table) return null;
+            
+            const rows = table.querySelectorAll('tr');
+            const keywordsLower = keywords.map(k => k.toLowerCase().trim());
+            
+            for (const row of rows) {
+                const cells = Array.from(row.querySelectorAll('td, th'));
+                if (cells.length < 2) continue;
                 
-                for (const row of rows) {
-                    const cells = row.querySelectorAll('td, th');
-                    if (cells.length < 2) continue;
-                    
-                    const rowText = row.textContent.toLowerCase();
-                    
-                    for (const keyword of keywordsLower) {
-                        if (rowText.includes(keyword)) {
-                            // Look for numbers in cells (skip first cell which is usually label)
-                            for (let i = 1; i < cells.length; i++) {
-                                const cellText = cells[i].textContent.trim();
-                                const num = parseNumber(cellText);
-                                if (num !== null && Math.abs(num) > 0) {
-                                    return num;
-                                }
-                            }
+                // Get the label (first cell with text)
+                let labelCell = cells.find(c => c.textContent.trim().length > 2);
+                if (!labelCell) continue;
+                
+                const labelText = labelCell.textContent.toLowerCase().trim();
+                
+                // Check if this row matches our keywords
+                let matches = false;
+                for (const keyword of keywordsLower) {
+                    // More precise matching - the label should START with or closely match the keyword
+                    if (labelText.includes(keyword)) {
+                        // Avoid partial matches like "total assets" matching "total assets under management"
+                        const keywordIndex = labelText.indexOf(keyword);
+                        // Keyword should be near the start or be a significant part
+                        if (keywordIndex < 20 || labelText.length < keyword.length + 30) {
+                            matches = true;
+                            break;
                         }
                     }
                 }
+                
+                if (!matches) continue;
+                
+                // Look for numeric values in subsequent cells (prefer the most recent quarter)
+                // Usually the first numeric column after the label is the most recent period
+                for (let i = 1; i < cells.length; i++) {
+                    const cellText = cells[i].textContent.trim();
+                    const num = parseNumber(cellText);
+                    if (num !== null && num !== 0) {
+                        return num * multiplier;
+                    }
+                }
             }
+            
             return null;
         }
 
         function extractCompanyInfo(html) {
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
-            const text = doc.body.textContent;
+            const text = doc.body.textContent.substring(0, 20000);
             
-            // Company name
+            // Company name - look for common patterns
             let name = 'Unknown';
-            const namePatterns = [
-                /FORM\s+10-Q[^]*?([A-Z][A-Za-z\s&,\.]+(?:Inc\.|Corporation|Corp\.|LLC|Company|Co\.))/i,
-                /([A-Z][A-Za-z\s&]+(?:Inc\.|Corporation|Corp\.|LLC|Company|Co\.))/,
-            ];
             
-            for (const pattern of namePatterns) {
-                const match = text.substring(0, 10000).match(pattern);
-                if (match && match[1].length > 3 && match[1].length < 60) {
-                    name = match[1].trim().replace(/\s+/g, ' ');
-                    break;
+            // Try to find company name from title or header
+            const titleEl = doc.querySelector('title');
+            if (titleEl) {
+                const titleText = titleEl.textContent;
+                // Often format: "Company Name - 10-Q"
+                const titleMatch = titleText.match(/^([^-–]+)/);
+                if (titleMatch && titleMatch[1].length > 3 && titleMatch[1].length < 50) {
+                    name = titleMatch[1].trim();
+                }
+            }
+            
+            // Fallback patterns
+            if (name === 'Unknown') {
+                const patterns = [
+                    /REGISTRANT[:\s]+([A-Z][A-Za-z\s&,\.]+(?:Inc\.|Corporation|Corp\.|LLC|Company|Co\.|LP|Ltd\.))/i,
+                    /COMPANY NAME[:\s]+([A-Z][A-Za-z\s&,\.]+)/i,
+                    /(?:^|\n)([A-Z][A-Z\s&]+(?:INC\.|CORPORATION|CORP\.|LLC|COMPANY|CO\.))/m,
+                ];
+                
+                for (const pattern of patterns) {
+                    const match = text.match(pattern);
+                    if (match && match[1].length > 3 && match[1].length < 60) {
+                        name = match[1].trim().replace(/\s+/g, ' ');
+                        // Title case
+                        name = name.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+                        break;
+                    }
                 }
             }
             
             // Filing period
             let period = 'N/A';
-            const periodMatch = text.match(/(?:QUARTER(?:LY)?|PERIOD)\s+ENDED?\s+(\w+\s+\d{1,2},?\s+\d{4})/i);
-            if (periodMatch) {
-                period = periodMatch[1];
+            const periodPatterns = [
+                /(?:QUARTERLY|QUARTER|PERIOD)\s+(?:ENDED?|ENDING)\s+(\w+\s+\d{1,2},?\s+\d{4})/i,
+                /(?:THREE|NINE|SIX)\s+MONTHS\s+ENDED\s+(\w+\s+\d{1,2},?\s+\d{4})/i,
+                /(?:FOR THE PERIOD ENDED|AS OF)\s+(\w+\s+\d{1,2},?\s+\d{4})/i,
+            ];
+            
+            for (const pattern of periodPatterns) {
+                const match = text.match(pattern);
+                if (match) {
+                    period = match[1].trim();
+                    break;
+                }
             }
             
             // CIK
             let cik = 'N/A';
-            const cikMatch = text.match(/CIK[:\s]+(\d+)/i) || text.match(/edgar\/data\/(\d+)/i);
+            const cikMatch = text.match(/CIK[:\s#]+(\d{7,10})/i) || 
+                            text.match(/edgar\/data\/(\d+)/i) ||
+                            text.match(/Commission File Number[:\s]+(\d+-\d+)/i);
             if (cikMatch) {
                 cik = cikMatch[1];
             }
@@ -573,38 +707,116 @@
         }
 
         function analyzeHTML(html, url) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
             const info = extractCompanyInfo(html);
+            
+            // Find the best tables for each statement type
+            const incomeTable = findBestTable(doc, 'income');
+            const balanceTable = findBestTable(doc, 'balance');
+            const cashflowTable = findBestTable(doc, 'cashflow');
+            
+            // Detect multipliers
+            const incomeMultiplier = incomeTable ? detectMultiplier(incomeTable.textContent) : 1;
+            const balanceMultiplier = balanceTable ? detectMultiplier(balanceTable.textContent) : 1;
+            const cashflowMultiplier = cashflowTable ? detectMultiplier(cashflowTable.textContent) : 1;
             
             const financials = {
                 // Income Statement
-                revenue: extractFromTables(html, ['total revenues', 'net revenues', 'total net revenues', 'net sales', 'total sales']),
-                netIncome: extractFromTables(html, ['net income', 'net income (loss)', 'net earnings', 'net income attributable']),
-                operatingIncome: extractFromTables(html, ['income from operations', 'operating income', 'operating income (loss)']),
-                grossProfit: extractFromTables(html, ['gross profit', 'gross margin']),
+                revenue: extractValueFromTable(incomeTable, [
+                    'total revenues', 'revenues', 'net revenues', 'total net revenues', 
+                    'net sales', 'total sales', 'total net sales', 'revenue'
+                ], incomeMultiplier),
+                
+                costOfRevenue: extractValueFromTable(incomeTable, [
+                    'cost of revenues', 'cost of revenue', 'cost of sales', 
+                    'cost of goods sold', 'cost of products sold'
+                ], incomeMultiplier),
+                
+                grossProfit: extractValueFromTable(incomeTable, [
+                    'gross profit', 'gross margin'
+                ], incomeMultiplier),
+                
+                operatingIncome: extractValueFromTable(incomeTable, [
+                    'income from operations', 'operating income', 'operating income (loss)'
+                ], incomeMultiplier),
+                
+                netIncome: extractValueFromTable(incomeTable, [
+                    'net income', 'net income (loss)', 'net earnings', 
+                    'net income attributable to', 'net income attributable'
+                ], incomeMultiplier),
                 
                 // Balance Sheet
-                totalAssets: extractFromTables(html, ['total assets']),
-                cash: extractFromTables(html, ['cash and cash equivalents', 'cash, cash equivalents']),
-                marketableSecurities: extractFromTables(html, ['marketable securities', 'short-term investments']),
-                currentAssets: extractFromTables(html, ['total current assets']),
-                totalLiabilities: extractFromTables(html, ['total liabilities']),
-                currentLiabilities: extractFromTables(html, ['total current liabilities']),
-                longTermDebt: extractFromTables(html, ['long-term debt', 'long-term notes']),
-                totalEquity: extractFromTables(html, ["total stockholders' equity", "total shareholders' equity", 'total equity']),
+                totalAssets: extractValueFromTable(balanceTable, [
+                    'total assets'
+                ], balanceMultiplier),
+                
+                cash: extractValueFromTable(balanceTable, [
+                    'cash and cash equivalents', 'cash, cash equivalents',
+                    'cash and equivalents'
+                ], balanceMultiplier),
+                
+                marketableSecurities: extractValueFromTable(balanceTable, [
+                    'marketable securities', 'short-term investments',
+                    'short-term marketable securities'
+                ], balanceMultiplier),
+                
+                currentAssets: extractValueFromTable(balanceTable, [
+                    'total current assets'
+                ], balanceMultiplier),
+                
+                totalLiabilities: extractValueFromTable(balanceTable, [
+                    'total liabilities'
+                ], balanceMultiplier),
+                
+                currentLiabilities: extractValueFromTable(balanceTable, [
+                    'total current liabilities'
+                ], balanceMultiplier),
+                
+                longTermDebt: extractValueFromTable(balanceTable, [
+                    'long-term debt', 'long-term notes payable',
+                    'long-term borrowings', 'notes payable'
+                ], balanceMultiplier),
+                
+                totalEquity: extractValueFromTable(balanceTable, [
+                    "total stockholders' equity", "total shareholders' equity", 
+                    "stockholders' equity", "shareholders' equity",
+                    'total equity'
+                ], balanceMultiplier),
                 
                 // Cash Flow
-                operatingCF: extractFromTables(html, ['cash provided by operating', 'net cash from operating', 'operating activities']),
-                investingCF: extractFromTables(html, ['cash used in investing', 'net cash from investing', 'investing activities']),
-                financingCF: extractFromTables(html, ['cash used in financing', 'net cash from financing', 'financing activities']),
-                capex: extractFromTables(html, ['capital expenditures', 'purchases of property', 'property and equipment']),
+                operatingCF: extractValueFromTable(cashflowTable, [
+                    'net cash provided by operating activities',
+                    'net cash from operating activities',
+                    'cash provided by operating activities'
+                ], cashflowMultiplier),
+                
+                investingCF: extractValueFromTable(cashflowTable, [
+                    'net cash used in investing activities',
+                    'net cash from investing activities',
+                    'cash used in investing activities'
+                ], cashflowMultiplier),
+                
+                financingCF: extractValueFromTable(cashflowTable, [
+                    'net cash used in financing activities',
+                    'net cash from financing activities',
+                    'cash used in financing activities'
+                ], cashflowMultiplier),
+                
+                capex: extractValueFromTable(cashflowTable, [
+                    'purchases of property and equipment',
+                    'capital expenditures',
+                    'purchases of property, plant and equipment',
+                    'acquisition of property and equipment'
+                ], cashflowMultiplier),
             };
             
             // Calculated metrics
-            if (financials.operatingCF && financials.capex) {
+            if (financials.operatingCF !== null && financials.capex !== null) {
                 financials.freeCashFlow = financials.operatingCF - Math.abs(financials.capex);
             }
             
-            if (financials.revenue && financials.netIncome) {
+            if (financials.revenue && financials.netIncome && financials.revenue !== 0) {
                 financials.netMargin = (financials.netIncome / financials.revenue) * 100;
             }
             
@@ -616,8 +828,8 @@
                 financials.debtToAssets = (financials.longTermDebt / financials.totalAssets) * 100;
             }
             
-            if (financials.cash && financials.longTermDebt) {
-                financials.netCash = financials.cash - financials.longTermDebt;
+            if (financials.cash !== null && financials.longTermDebt !== null) {
+                financials.netCash = financials.cash - (financials.longTermDebt || 0);
             }
             
             return {
@@ -676,21 +888,23 @@
             
             const absVal = Math.abs(val);
             let formatted;
-            let suffix = '';
+            let suffix = 'M';
             
-            if (absVal >= 1000000) {
-                formatted = (val / 1000000).toFixed(1);
-                suffix = 'T';
-            } else if (absVal >= 1000) {
+            // Values are already in millions
+            if (absVal >= 1000) {
                 formatted = (val / 1000).toFixed(1);
                 suffix = 'B';
-            } else {
+            } else if (absVal >= 1) {
                 formatted = val.toFixed(decimals);
                 suffix = 'M';
+            } else {
+                formatted = (val * 1000).toFixed(0);
+                suffix = 'K';
             }
             
             const cls = val < 0 ? 'negative' : 'positive';
-            return `<span class="${cls}">$${formatted}${suffix}</span>`;
+            const sign = val < 0 ? '-' : '';
+            return `<span class="${cls}">${sign}$${Math.abs(parseFloat(formatted)).toFixed(formatted.includes('.') ? 1 : 0)}${suffix}</span>`;
         }
 
         function fmtPct(val) {
@@ -723,9 +937,10 @@
             // Income Statement
             const incomeMetrics = [
                 ['Revenue', 'revenue'],
-                ['Net Income', 'netIncome'],
-                ['Operating Income', 'operatingIncome'],
+                ['Cost of Revenue', 'costOfRevenue'],
                 ['Gross Profit', 'grossProfit'],
+                ['Operating Income', 'operatingIncome'],
+                ['Net Income', 'netIncome'],
                 ['Net Margin', 'netMargin', 'pct'],
             ];
             
@@ -799,7 +1014,7 @@
                 summaries.push({ title: '💰 Highest Revenue', text: `${best.name}` });
             }
             
-            const validMargin = cos.filter(c => c.financials.netMargin);
+            const validMargin = cos.filter(c => c.financials.netMargin !== null && c.financials.netMargin !== undefined);
             if (validMargin.length) {
                 const best = validMargin.reduce((a, b) => (a.financials.netMargin || -999) > (b.financials.netMargin || -999) ? a : b);
                 summaries.push({ title: '📈 Best Net Margin', text: `${best.name} (${best.financials.netMargin.toFixed(1)}%)` });
@@ -807,15 +1022,24 @@
             
             document.getElementById('summaryCards').innerHTML = summaries.map(s => `
                 <div class="summary-card"><h4>${s.title}</h4><p>${s.text}</p></div>
-            `).join('');
+            `).join('') || '<div class="summary-card"><h4>📊 Analysis Complete</h4><p>Review the tables above for detailed metrics.</p></div>';
             
             // Red Flags
             const flags = [];
             for (const c of cos) {
                 const f = [];
-                if (c.financials.freeCashFlow < 0) f.push(`Negative FCF`);
-                if (c.financials.debtToAssets > 50) f.push(`High debt (${c.financials.debtToAssets?.toFixed(0)}%)`);
-                if (c.financials.currentRatio < 1) f.push(`Low current ratio`);
+                if (c.financials.freeCashFlow !== null && c.financials.freeCashFlow < 0) {
+                    f.push(`Negative FCF ($${(c.financials.freeCashFlow / 1000).toFixed(1)}B)`);
+                }
+                if (c.financials.debtToAssets !== null && c.financials.debtToAssets > 50) {
+                    f.push(`High debt (${c.financials.debtToAssets.toFixed(0)}% of assets)`);
+                }
+                if (c.financials.currentRatio !== null && c.financials.currentRatio < 1) {
+                    f.push(`Low current ratio (${c.financials.currentRatio.toFixed(2)})`);
+                }
+                if (c.financials.netIncome !== null && c.financials.netIncome < 0) {
+                    f.push(`Net loss reported`);
+                }
                 if (f.length) flags.push({ company: c.name, flags: f });
             }
             
@@ -824,7 +1048,7 @@
                     <h4>⚠️ ${f.company.substring(0, 25)}</h4>
                     ${f.flags.map(fl => `<div class="red-flag">• ${fl}</div>`).join('')}
                 </div>
-            `).join('') : '<div class="summary-card"><h4>✅ No Major Red Flags</h4></div>';
+            `).join('') : '<div class="summary-card"><h4>✅ No Major Red Flags</h4><p>All companies appear financially healthy based on available data.</p></div>';
             
             document.getElementById('results').classList.add('visible');
         }
@@ -835,11 +1059,17 @@
             md += `Generated: ${new Date().toLocaleString()}\n\n`;
             md += `## Companies\n`;
             cos.forEach((c, i) => md += `${i + 1}. **${c.name}** - ${c.period}\n`);
-            md += `\n## Key Metrics\n`;
+            md += `\n## Key Metrics (in millions USD)\n`;
             md += `| Metric | ${cos.map(c => c.name.substring(0, 15)).join(' | ')} |\n`;
             md += `|--------|${cos.map(() => '---').join('|')}|\n`;
-            md += `| Revenue | ${cos.map(c => c.financials.revenue ? `$${(c.financials.revenue/1000).toFixed(1)}B` : 'N/A').join(' | ')} |\n`;
-            md += `| Net Income | ${cos.map(c => c.financials.netIncome ? `$${(c.financials.netIncome/1000).toFixed(1)}B` : 'N/A').join(' | ')} |\n`;
+            
+            const fmtMd = (v) => v === null ? 'N/A' : (Math.abs(v) >= 1000 ? `$${(v/1000).toFixed(1)}B` : `$${v.toFixed(0)}M`);
+            
+            md += `| Revenue | ${cos.map(c => fmtMd(c.financials.revenue)).join(' | ')} |\n`;
+            md += `| Net Income | ${cos.map(c => fmtMd(c.financials.netIncome)).join(' | ')} |\n`;
+            md += `| Total Assets | ${cos.map(c => fmtMd(c.financials.totalAssets)).join(' | ')} |\n`;
+            md += `| Total Equity | ${cos.map(c => fmtMd(c.financials.totalEquity)).join(' | ')} |\n`;
+            md += `| Operating CF | ${cos.map(c => fmtMd(c.financials.operatingCF)).join(' | ')} |\n`;
             
             const blob = new Blob([md], { type: 'text/markdown' });
             const a = document.createElement('a');
@@ -859,7 +1089,7 @@
         function exportCSV() {
             const cos = analysisResults;
             let csv = 'Metric,' + cos.map(c => `"${c.name}"`).join(',') + '\n';
-            const metrics = ['revenue', 'netIncome', 'operatingIncome', 'totalAssets', 'cash', 'totalLiabilities', 'longTermDebt', 'totalEquity', 'operatingCF', 'freeCashFlow', 'netMargin', 'currentRatio'];
+            const metrics = ['revenue', 'netIncome', 'operatingIncome', 'grossProfit', 'totalAssets', 'cash', 'totalLiabilities', 'longTermDebt', 'totalEquity', 'operatingCF', 'freeCashFlow', 'netMargin', 'currentRatio'];
             metrics.forEach(m => {
                 csv += `${m},${cos.map(c => c.financials[m] ?? '').join(',')}\n`;
             });
@@ -873,4 +1103,3 @@
     </script>
 </body>
 </html>
-
