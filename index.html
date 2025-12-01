@@ -427,23 +427,35 @@
         function detectMultiplier(tableText) {
             const text = tableText.toLowerCase();
             
-            // Check for explicit indicators
+            console.log(`Detecting multiplier. Text sample: "${text.substring(0, 500)}"`);
+            
+            // Check for explicit indicators - be very thorough
+            // THOUSANDS -> multiply by 0.001 to convert to millions
             if (text.includes('in thousands') || text.includes('(in thousands') || 
                 text.includes('$ in thousands') || text.includes('dollars in thousands') ||
-                text.includes('amounts in thousands')) {
+                text.includes('amounts in thousands') || text.includes('except share') ||
+                text.includes('except per share') || text.includes(', except')) {
+                console.log(`  -> Detected THOUSANDS, multiplier = 0.001`);
                 return 0.001; // Convert thousands to millions
             }
+            
+            // MILLIONS -> already in millions, multiplier = 1
             if (text.includes('in millions') || text.includes('(in millions') || 
                 text.includes('$ in millions') || text.includes('dollars in millions') ||
                 text.includes('amounts in millions')) {
+                console.log(`  -> Detected MILLIONS, multiplier = 1`);
                 return 1; // Already in millions
             }
+            
+            // BILLIONS -> multiply by 1000 to convert to millions
             if (text.includes('in billions') || text.includes('(in billions')) {
+                console.log(`  -> Detected BILLIONS, multiplier = 1000`);
                 return 1000; // Convert billions to millions
             }
             
-            // Default to millions
-            return 1;
+            // Default: assume thousands (safer for most 10-Q filings)
+            console.log(`  -> No explicit indicator found, defaulting to THOUSANDS (0.001)`);
+            return 0.001;
         }
 
         // Find the column index that matches the filing period
