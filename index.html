@@ -430,27 +430,7 @@
             // Extract just the header area (first 2000 chars usually has the unit indicator)
             const headerArea = text.substring(0, 2000);
             
-            // THOUSANDS patterns - be very comprehensive
-            const thousandsPatterns = [
-                'in thousands',
-                '(in thousands',
-                'thousands)',
-                '$ thousands',
-                'dollars in thousands',
-                ', except per share',
-                ', except share',
-                'except per share',
-                'per share data'
-            ];
-            
-            for (const pattern of thousandsPatterns) {
-                if (headerArea.includes(pattern)) {
-                    console.log(`  -> Detected THOUSANDS (pattern: "${pattern}")`);
-                    return 0.001;
-                }
-            }
-            
-            // MILLIONS patterns
+            // MILLIONS patterns - check these FIRST
             const millionsPatterns = [
                 'in millions',
                 '(in millions',
@@ -463,6 +443,22 @@
                 if (headerArea.includes(pattern)) {
                     console.log(`  -> Detected MILLIONS (pattern: "${pattern}")`);
                     return 1;
+                }
+            }
+            
+            // THOUSANDS patterns - only if not millions
+            const thousandsPatterns = [
+                'in thousands',
+                '(in thousands',
+                'thousands)',
+                '$ thousands',
+                'dollars in thousands'
+            ];
+            
+            for (const pattern of thousandsPatterns) {
+                if (headerArea.includes(pattern)) {
+                    console.log(`  -> Detected THOUSANDS (pattern: "${pattern}")`);
+                    return 0.001;
                 }
             }
             
@@ -643,7 +639,31 @@
                 }
             }
             
-            // PRIORITY 2: Find target year (2025) NOT under "Nine Months"
+            // PRIORITY 2: Find target year (2025) explicitly under "Three Months" 
+            // (even if not detected in same cell - check adjacent columns)
+            for (const entry of yearColumns) {
+                if (entry.year === targetYear && entry.periodType === 'three') {
+                    console.log(`  => Using col ${entry.col} (${targetYear} under Three Months)`);
+                    return entry.col;
+                }
+            }
+            
+            // PRIORITY 3: Find previous year under "Three Months" and use next column
+            // (Sometimes 2025 data is in the column AFTER the 2024 Three Months column)
+            for (const entry of yearColumns) {
+                if (entry.year === targetYear - 1 && entry.periodType === 'three') {
+                    // The 2025 data might be in the previous column (col - 1 or col - 2)
+                    // Check if there's a 2025 column nearby
+                    for (const other of yearColumns) {
+                        if (other.year === targetYear && Math.abs(other.col - entry.col) <= 2) {
+                            console.log(`  => Using col ${other.col} (${targetYear} near Three Months ${targetYear-1})`);
+                            return other.col;
+                        }
+                    }
+                }
+            }
+            
+            // PRIORITY 4: First column with target year that's NOT nine months
             for (const entry of yearColumns) {
                 if (entry.year === targetYear && entry.periodType !== 'nine') {
                     console.log(`  => Using col ${entry.col} (${targetYear}, not Nine Months)`);
@@ -651,18 +671,12 @@
                 }
             }
             
-            // PRIORITY 3: Find ANY target year column (first one)
+            // PRIORITY 5: First "three months" column (any year)
             for (const entry of yearColumns) {
-                if (entry.year === targetYear) {
-                    console.log(`  => Using col ${entry.col} (${targetYear}, any period)`);
+                if (entry.periodType === 'three') {
+                    console.log(`  => Fallback to first Three Months column: ${entry.col}`);
                     return entry.col;
                 }
-            }
-            
-            // PRIORITY 4: First column with any year
-            if (yearColumns.length > 0) {
-                console.log(`  => Fallback to first year column: ${yearColumns[0].col}`);
-                return yearColumns[0].col;
             }
             
             console.log(`  => No quarterly column found, returning -1`);
