@@ -549,66 +549,81 @@
             return bestScore > 0 ? bestTable : null;
         }
 
-        // Find the column index for "Three Months Ended" with the target year
-        // SEC 10-Q tables have headers like:
-        //   Row 1: | Three Months Ended | Three Months Ended | Nine Months Ended | Nine Months Ended |
-        //   Row 2: | Sept 30, 2025      | Sept 30, 2024      | Sept 30, 2025     | Sept 30, 2024     |
-        // We want the "Three Months" column for 2025 (the filing year)
+        // Find the column index for "Three Months Ended" with the target year (2025)
+        // SEC 10-Q tables typically have headers like:
+        //   Row 1: |              | Three Months Ended |              | Nine Months Ended  |              |
+        //   Row 2: |              | Sept 30, 2025      | Sept 30, 2024| Sept 30, 2025      | Sept 30, 2024|
+        // We want the FIRST column with "2025" that is under "Three Months" (not "Nine Months")
         function findQuarterlyColumnIndex(rows, targetYear) {
             console.log(`Looking for quarterly column with year ${targetYear}`);
             
-            // Track which columns are "three months" vs "nine months"
-            let threeMonthsCols = [];
-            let nineMonthsCols = [];
-            let yearCols = {}; // colIndex -> year
+            // Strategy: Find all columns with the target year, then pick the first one
+            // that's NOT under a "Nine Months" header
             
-            // Scan header rows to identify column types
-            for (const row of rows.slice(0, 15)) {
+            let yearColumns = []; // Array of {colIndex, year, isNineMonths}
+            let currentPeriodType = null; // 'three' or 'nine' - tracks the most recent period header
+            
+            // First pass: identify period type headers (Three Months vs Nine Months)
+            // These often span multiple columns
+            let periodTypeByCol = {}; // colIndex -> 'three' or 'nine'
+            
+            for (const row of rows.slice(0, 10)) {
                 const cells = Array.from(row.querySelectorAll('td, th'));
+                let lastPeriodType = null;
                 
                 for (let i = 0; i < cells.length; i++) {
                     const cellText = cells[i].textContent.toLowerCase().trim();
                     
-                    // Check for "three months" or "nine months"
-                    if (cellText.includes('three months') && !threeMonthsCols.includes(i)) {
-                        threeMonthsCols.push(i);
-                        console.log(`  Col ${i} is THREE MONTHS: "${cellText.substring(0, 50)}"`);
-                    }
-                    if (cellText.includes('nine months') && !nineMonthsCols.includes(i)) {
-                        nineMonthsCols.push(i);
-                        console.log(`  Col ${i} is NINE MONTHS: "${cellText.substring(0, 50)}"`);
+                    if (cellText.includes('three months')) {
+                        lastPeriodType = 'three';
+                        periodTypeByCol[i] = 'three';
+                        console.log(`  Col ${i}: THREE MONTHS header`);
+                    } else if (cellText.includes('nine months')) {
+                        lastPeriodType = 'nine';
+                        periodTypeByCol[i] = 'nine';
+                        console.log(`  Col ${i}: NINE MONTHS header`);
                     }
                     
-                    // Check for year (2024, 2025, etc.)
+                    // Check for year in this cell
                     const yearMatch = cellText.match(/20\d{2}/);
-                    if (yearMatch && !yearCols[i]) {
-                        yearCols[i] = parseInt(yearMatch[0]);
-                        console.log(`  Col ${i} has year ${yearMatch[0]}: "${cellText.substring(0, 50)}"`);
+                    if (yearMatch) {
+                        const year = parseInt(yearMatch[0]);
+                        // Inherit period type from the last seen header or from same column
+                        const periodType = periodTypeByCol[i] || lastPeriodType;
+                        yearColumns.push({ col: i, year, periodType });
+                        console.log(`  Col ${i}: Year ${year}, period type: ${periodType || 'unknown'}`);
                     }
                 }
             }
             
-            // PRIORITY 1: Find a "three months" column with the target year
-            for (const col of threeMonthsCols) {
-                if (yearCols[col] === targetYear) {
-                    console.log(`  => Using col ${col} (three months + ${targetYear})`);
-                    return col;
+            // PRIORITY 1: Find target year (2025) under "Three Months"
+            for (const entry of yearColumns) {
+                if (entry.year === targetYear && entry.periodType === 'three') {
+                    console.log(`  => Using col ${entry.col} (${targetYear} under Three Months)`);
+                    return entry.col;
                 }
             }
             
-            // PRIORITY 2: Find any column with target year that's NOT nine months
-            for (const [col, year] of Object.entries(yearCols)) {
-                const colNum = parseInt(col);
-                if (year === targetYear && !nineMonthsCols.includes(colNum)) {
-                    console.log(`  => Using col ${colNum} (${targetYear}, not nine months)`);
-                    return colNum;
+            // PRIORITY 2: Find target year (2025) NOT under "Nine Months"
+            for (const entry of yearColumns) {
+                if (entry.year === targetYear && entry.periodType !== 'nine') {
+                    console.log(`  => Using col ${entry.col} (${targetYear}, not Nine Months)`);
+                    return entry.col;
                 }
             }
             
-            // PRIORITY 3: First "three months" column
-            if (threeMonthsCols.length > 0) {
-                console.log(`  => Fallback to first three months col: ${threeMonthsCols[0]}`);
-                return threeMonthsCols[0];
+            // PRIORITY 3: Find ANY target year column (first one)
+            for (const entry of yearColumns) {
+                if (entry.year === targetYear) {
+                    console.log(`  => Using col ${entry.col} (${targetYear}, any period)`);
+                    return entry.col;
+                }
+            }
+            
+            // PRIORITY 4: First column with any year
+            if (yearColumns.length > 0) {
+                console.log(`  => Fallback to first year column: ${yearColumns[0].col}`);
+                return yearColumns[0].col;
             }
             
             console.log(`  => No quarterly column found, returning -1`);
