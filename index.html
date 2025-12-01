@@ -474,74 +474,51 @@
             return 1; // Default to first data column after label
         }
 
-        // Score how likely a table is to be a financial statement
+        // Score how likely a table is to be the Income Statement
+        // ONLY looking for: CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS
+        // or: UNAUDITED CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS AND COMPREHENSIVE INCOME
         function scoreFinancialTable(table, statementType) {
-            let score = 0;
             const text = table.textContent.toLowerCase();
             const rows = table.querySelectorAll('tr');
             
-            if (rows.length < 3) return -100;
-            if (rows.length > 150) score -= 10;
+            // Basic sanity checks
+            if (rows.length < 5) return -1000;
             
-            // CRITICAL: Skip table of contents - they have "page" and many "note X" entries
-            if (text.includes('table of contents') || text.includes('index')) {
-                return -100;
-            }
+            // REJECT: Table of contents, notes, schedules
+            if (text.includes('table of contents')) return -1000;
+            if (text.includes('part i') && text.includes('part ii') && text.includes('item')) return -1000;
+            if (text.includes('notes to consolidated') || text.includes('notes to condensed')) return -1000;
+            if (text.includes('schedule of')) return -1000;
             
-            // Skip if this looks like a TOC (has "page" header and numbered notes)
-            const hasPageColumn = text.includes('page') && (text.match(/note\s+\d/g) || []).length > 3;
-            if (hasPageColumn) {
-                return -100;
-            }
-            
-            // Skip if it contains "part i" and "part ii" (cover page TOC)
-            if (text.includes('part i') && text.includes('part ii')) {
-                return -100;
-            }
+            // REJECT: If "page" appears multiple times (likely TOC)
+            const pageMatches = (text.match(/\bpage\b/g) || []).length;
+            if (pageMatches > 2) return -1000;
             
             if (statementType === 'income') {
-                // Must have the actual statement header
-                if (text.includes('condensed consolidated statements of operations') && 
-                    !text.includes('see accompanying notes')) score += 50;
-                if (text.includes('consolidated statements of operations')) score += 40;
-                if (text.includes('statements of operations')) score += 30;
-                if (text.includes('condensed consolidated statements of income')) score += 50;
-                if (text.includes('consolidated statements of income')) score += 40;
+                // EXACT MATCHES ONLY for income statement headers
+                // Priority 1: Exact header matches (highest scores)
+                if (text.includes('condensed consolidated statements of operations and comprehensive income')) return 100;
+                if (text.includes('unaudited condensed consolidated statements of operations')) return 100;
+                if (text.includes('condensed consolidated statements of operations')) return 100;
                 
-                // Must have actual financial line items (not just mentions)
-                if (text.includes('total net revenues') && text.includes('operating expenses')) score += 20;
-                if (text.includes('cost of revenue') || text.includes('cost of revenues')) score += 10;
-                if (text.includes('gross profit')) score += 10;
+                // Priority 2: Slightly less specific but still valid
+                if (text.includes('consolidated statements of operations') && 
+                    !text.includes('notes') && 
+                    (text.includes('three months') || text.includes('nine months'))) return 80;
                 
-                // Strong indicator: has dollar amounts or numbers in thousands/millions
-                if (text.includes('in millions') || text.includes('in thousands')) score += 15;
+                // Must have key income statement line items to be considered at all
+                const hasRevenue = text.includes('revenue') || text.includes('net sales');
+                const hasExpenses = text.includes('operating expenses') || text.includes('cost of');
+                const hasIncome = text.includes('net income') || text.includes('net loss');
                 
-            } else if (statementType === 'balance') {
-                if (text.includes('condensed consolidated balance sheet') && 
-                    !text.includes('see accompanying notes')) score += 50;
-                if (text.includes('consolidated balance sheet')) score += 40;
-                if (text.includes('balance sheet')) score += 30;
-                if (text.includes('total assets') && text.includes('total liabilities')) score += 20;
-                if (text.includes('in millions') || text.includes('in thousands')) score += 15;
+                if (hasRevenue && hasExpenses && hasIncome) return 50;
                 
-            } else if (statementType === 'cashflow') {
-                if (text.includes('condensed consolidated statements of cash flows') && 
-                    !text.includes('see accompanying notes')) score += 50;
-                if (text.includes('consolidated statements of cash flows')) score += 40;
-                if (text.includes('statements of cash flows')) score += 30;
-                if (text.includes('operating activities') && text.includes('investing activities')) score += 20;
-                if (text.includes('in millions') || text.includes('in thousands')) score += 15;
+                // Not a valid income statement
+                return -1000;
             }
             
-            // Penalize notes/schedules
-            if (text.includes('notes to consolidated') || text.includes('notes to condensed')) score -= 20;
-            if (text.includes('schedule of')) score -= 15;
-            
-            // Penalize if it's mostly text (notes) vs numbers
-            const numberMatches = text.match(/[\d,]+/g) || [];
-            if (numberMatches.length < 10) score -= 10;
-            
-            return score;
+            // For now, skip balance sheet and cash flow (will fix later)
+            return -1000;
         }
 
         function findBestTable(doc, statementType) {
@@ -609,6 +586,7 @@
         }
 
         // Extract value from table, using the correct column for the filing period
+        // STRICT matching: label must START WITH or EQUAL the keyword
         function extractValueFromTable(table, keywords, multiplier, periodDate) {
             if (!table) return null;
             
@@ -635,15 +613,16 @@
                 }
             }
             
+            // First pass: look for EXACT or START-WITH matches (strict)
             for (const row of rows) {
                 const cells = Array.from(row.querySelectorAll('td, th'));
                 if (cells.length < 2) continue;
                 
-                // Get label from first cell(s)
+                // Get label from first cell(s) - clean it up
                 let labelText = '';
                 let labelEndIndex = 0;
                 for (let i = 0; i < Math.min(2, cells.length); i++) {
-                    const cellContent = cells[i].textContent.trim();
+                    const cellContent = cells[i].textContent.trim().replace(/\s+/g, ' ');
                     if (cellContent && !/^[\d,$().\-—–\s]+$/.test(cellContent)) {
                         labelText += ' ' + cellContent.toLowerCase();
                         labelEndIndex = i;
@@ -653,50 +632,92 @@
                 }
                 labelText = labelText.trim();
                 
-                // Check if this row matches our keywords
+                // STRICT MATCHING: Label must START WITH the keyword or be very close
                 let matchedKeyword = null;
-                let matchScore = 0;
                 
                 for (const keyword of keywordsLower) {
+                    // Check if label STARTS WITH keyword (best match)
+                    if (labelText.startsWith(keyword)) {
+                        matchedKeyword = keyword;
+                        break; // Best possible match
+                    }
+                    // Check if label equals keyword exactly
+                    if (labelText === keyword) {
+                        matchedKeyword = keyword;
+                        break;
+                    }
+                }
+                
+                if (!matchedKeyword) continue;
+                
+                // Extract value from the correct column
+                // PRIORITY 1: Use the identified quarterly column
+                if (quarterlyColumnIndex >= 0 && quarterlyColumnIndex < cells.length) {
+                    const num = parseNumber(cells[quarterlyColumnIndex].textContent);
+                    if (num !== null) {
+                        console.log(`Found ${matchedKeyword}: ${num} * ${multiplier} = ${num * multiplier} (col ${quarterlyColumnIndex})`);
+                        return num * multiplier;
+                    }
+                }
+                
+                // PRIORITY 2: Find the first "three months" column that has a value
+                for (let i = labelEndIndex + 1; i < cells.length; i++) {
+                    if (columnTypes[i] === 'nine') continue; // Skip nine months columns
+                    
+                    const num = parseNumber(cells[i].textContent);
+                    if (num !== null) {
+                        console.log(`Found ${matchedKeyword}: ${num} * ${multiplier} = ${num * multiplier} (col ${i}, three months)`);
+                        return num * multiplier;
+                    }
+                }
+            }
+            
+            // Second pass: looser matching if strict didn't work
+            for (const row of rows) {
+                const cells = Array.from(row.querySelectorAll('td, th'));
+                if (cells.length < 2) continue;
+                
+                let labelText = '';
+                let labelEndIndex = 0;
+                for (let i = 0; i < Math.min(2, cells.length); i++) {
+                    const cellContent = cells[i].textContent.trim().replace(/\s+/g, ' ');
+                    if (cellContent && !/^[\d,$().\-—–\s]+$/.test(cellContent)) {
+                        labelText += ' ' + cellContent.toLowerCase();
+                        labelEndIndex = i;
+                    } else if (labelText) {
+                        break;
+                    }
+                }
+                labelText = labelText.trim();
+                
+                // Looser: label CONTAINS keyword, but keyword must be significant part
+                let matchedKeyword = null;
+                for (const keyword of keywordsLower) {
                     if (labelText.includes(keyword)) {
-                        const idx = labelText.indexOf(keyword);
-                        const score = (keyword.length * 10) - idx;
-                        
-                        if (score > matchScore) {
-                            matchScore = score;
+                        // Reject if keyword is just a small part of a longer label
+                        // e.g., "revenues" in "transaction-based revenues" - reject
+                        // but "total net revenues" in "total net revenues" - accept
+                        const keywordRatio = keyword.length / labelText.length;
+                        if (keywordRatio > 0.5) { // Keyword must be >50% of label
                             matchedKeyword = keyword;
+                            break;
                         }
                     }
                 }
                 
                 if (!matchedKeyword) continue;
                 
-                // For "total" keywords, verify "total" is in the label
-                if (matchedKeyword.includes('total') && !labelText.includes('total')) {
-                    continue;
-                }
-                
-                // PRIORITY 1: Use the identified quarterly column
+                // Extract value
                 if (quarterlyColumnIndex >= 0 && quarterlyColumnIndex < cells.length) {
                     const num = parseNumber(cells[quarterlyColumnIndex].textContent);
                     if (num !== null) {
+                        console.log(`Found (loose) ${matchedKeyword}: ${num} * ${multiplier} = ${num * multiplier}`);
                         return num * multiplier;
                     }
                 }
                 
-                // PRIORITY 2: Find the first "three months" column with target year that has a value
                 for (let i = labelEndIndex + 1; i < cells.length; i++) {
-                    // Skip "nine months" columns
                     if (columnTypes[i] === 'nine') continue;
-                    
-                    const num = parseNumber(cells[i].textContent);
-                    if (num !== null) {
-                        return num * multiplier;
-                    }
-                }
-                
-                // PRIORITY 3: Just get the first numeric value after the label
-                for (let i = labelEndIndex + 1; i < cells.length; i++) {
                     const num = parseNumber(cells[i].textContent);
                     if (num !== null) {
                         return num * multiplier;
